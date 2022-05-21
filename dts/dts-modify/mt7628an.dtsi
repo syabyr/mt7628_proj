@@ -236,6 +236,10 @@
 
 			interrupt-parent = <&intc>;
 			interrupts = <4>;
+			
+			dmas = <&gdma 4>,
+				<&gdma 5>,
+			dma-names = "tx", "rx";
 
 			status = "disabled";
 		};
