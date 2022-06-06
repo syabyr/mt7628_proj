@@ -13,7 +13,7 @@
 
 	spis {
                 groups = "spis";
-                function = "spis";
+                function = "gpio";
         };
 };
 
@@ -88,4 +88,6 @@
 
 &pcm {
         status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&pcm_i2s_pins>;
 };
