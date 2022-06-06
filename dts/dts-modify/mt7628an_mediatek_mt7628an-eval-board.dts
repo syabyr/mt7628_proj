@@ -15,9 +15,43 @@
                 groups = "spis";
                 function = "gpio";
         };
+
 };
 
-&wmac {
+&i2c {
+	status = "okay";
+
+	codec: wm8960@1a {
+		#sound-dai-cells = <0>;
+		compatible = "wlf,wm8960";
+		reg = <0x1a>;
+
+		wlf,shared-lrclk;
+	};
+};
+
+&ethernet {
+	mtd-mac-address = <&factory 0x4>;
+};
+
+&esw {
+	mediatek,portmap = <0x3e>;
+	mediatek,portdisable = <0x3c>;
+};
+
+&i2s {
+        status = "disabled";
+        pinctrl-names = "default";
+        pinctrl-0 = <&pcm_i2s_pins>;
+};
+
+&pcm {
+        status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&pcm_i2s_pins>;
+};
+
+&gdma {
 	status = "okay";
 };
 
@@ -76,18 +110,6 @@
 	status = "okay";
 };
 
-&i2c {
-        status = "okay";
-};
 
-&i2s {
-        status = "okay";
-        pinctrl-names = "default";
-        pinctrl-0 = <&pcm_i2s_pins>;
-};
 
-&pcm {
-        status = "okay";
-	pinctrl-names = "default";
-	pinctrl-0 = <&pcm_i2s_pins>;
-};
+
