@@ -1,5 +1,6 @@
 /*
  *  Copyright (C) 2010, Lars-Peter Clausen <lars@metafoo.de>
+ *  Copyright (C) 2016 Michael Lee <igvtee@gmail.com>
  *
  *  This program is free software; you can redistribute it and/or modify it
  *  under  the terms of the GNU General  Public License as published by the
@@ -12,29 +13,27 @@
  *
  */
 
-#include <linux/init.h>
-#include <linux/io.h>
-#include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
-#include <linux/slab.h>
-
-#include <linux/delay.h>
-
-#include <linux/dma-mapping.h>
-
-#include <sound/core.h>
-#include <sound/pcm.h>
+#include <linux/clk.h>
+#include <linux/regmap.h>
+#include <linux/reset.h>
+#include <linux/debugfs.h>
+#include <linux/of_device.h>
 #include <sound/pcm_params.h>
-#include <sound/soc.h>
-#include <sound/initval.h>
 #include <sound/dmaengine_pcm.h>
 
-#include <ralink_regs.h>
+#include <asm/mach-ralink/ralink_regs.h>
+
+#define DRV_NAME "ralink-pcm"
 
 #define PCM_GLB_CFG 0x00
 #define PCM_GLB_CFG_EN BIT(31)
 #define PCM_GLB_CFG_DMA_EN BIT(30)
+#define PCM_GLB_CFG_LBK_EN BIT(29)
+#define PCM_GLB_CFG_EXT_LBK_EN BIT(28)
+
+
 #define PCM_GLB_CFG_CH0_TX_EN BIT(8)
 #define PCM_GLB_CFG_CH0_RX_EN BIT(0)
 
@@ -43,6 +42,7 @@
 
 #define PCM_GLB_CFG_DFT_THRES	(4 << PCM_GLB_CFG_RFF_THRES) | \
 					(4 << PCM_GLB_CFG_TFF_THRES)
+
 
 #define PCM_PCM_CFG 0x04
 #define PCM_PCM_CFG_CLKOUT_EN BIT(30)
@@ -54,11 +54,22 @@
 
 #define PCM_INT_STATUS 0x08
 #define PCM_INT_EN 0x0C
-#define PCM_FF_STATUS 0x10
+#define PCM_CHA0_FF_STATUS 0x10
+#define PCM_CHB0_FF_STATUS 0x14
+
 #define PCM_CH0_CFG 0x20
 #define PCM_CH1_CFG 0x24
+
 #define PCM_FSYNC_CFG 0x30
+#define PCM_FSYNC_EN BIT(31)
+#define PCM_FSYNC_POS_CAP_DT BIT(30)
+#define PCM_FSYNC_POS_DRV_DT BIT(29)
+#define PCM_FSYNC_POS_CAP_FSYNC BIT(28)
+#define PCM_FSYNC_POS_DRV_FSYNC BIT(27)
+
+
 #define PCM_CH_CFG2 0x34
+#define PCM_IP_INFO 0x40
 
 #define PCM_DIVCOMP_CFG 0x50
 #define PCM_DIVCOMP_CFG_CLK_EN BIT(31)
@@ -67,102 +78,829 @@
 #define PCM_DIGDELAY_CFG 0x60
 #define PCM_CH0_FIFO 0x80
 #define PCM_CH1_FIFO 0x84
+#define PCM_CH2_FIFO 0x88
+#define PCM_CH3_FIFO 0x8c
 
-struct mt7620a_pcm {
-	struct resource *mem;
-	void __iomem *base;
+#define PCM_CHA1_FF_STATUS 0x110
+#define PCM_CHB1_FF_STATUS 0x113
+#define PCM_CHA1_CFG 0x120
+#define PCM_CHB1_CFG 0x124
+#define PCM_CHA1_CFG2 0x134
+#define PCM_CHB1_CFG2 0x138
+
+/////////////////////////////
+
+#define pcm_REG_CFG0		0x00
+#define pcm_REG_INT_STATUS	0x04
+#define pcm_REG_INT_EN		0x08
+#define pcm_REG_FF_STATUS	0x0c
+#define pcm_REG_CFG1		0x18
+#define pcm_REG_DIVCMP		0x20
+#define pcm_REG_DIVINT		0x24
+
+/* pcm_REG_CFG0 */
+#define pcm_REG_CFG0_EN		BIT(31)
+#define pcm_REG_CFG0_DMA_EN	BIT(30)
+#define pcm_REG_CFG0_BYTE_SWAP	BIT(28)
+#define pcm_REG_CFG0_TX_EN	BIT(24)
+#define pcm_REG_CFG0_RX_EN	BIT(20)
+#define pcm_REG_CFG0_SLAVE	BIT(16)
+#define pcm_REG_CFG0_RX_THRES	12
+#define pcm_REG_CFG0_TX_THRES	4
+#define pcm_REG_CFG0_THRES_MASK	(0xf << pcm_REG_CFG0_RX_THRES) | \
+	(4 << pcm_REG_CFG0_TX_THRES)
+#define pcm_REG_CFG0_DFT_THRES	(4 << pcm_REG_CFG0_RX_THRES) | \
+	(4 << pcm_REG_CFG0_TX_THRES)
+/* RT305x */
+#define pcm_REG_CFG0_CLK_DIS	BIT(8)
+#define pcm_REG_CFG0_TXCH_SWAP	BIT(3)
+#define pcm_REG_CFG0_TXCH1_OFF	BIT(2)
+#define pcm_REG_CFG0_TXCH0_OFF	BIT(1)
+#define pcm_REG_CFG0_SLAVE_EN	BIT(0)
+
+
+
+/* feature flags */
+#define RALINK_FLAGS_TXONLY	BIT(0)
+#define RALINK_FLAGS_LEFT_J	BIT(1)
+#define RALINK_FLAGS_RIGHT_J	BIT(2)
+#define RALINK_FLAGS_ENDIAN	BIT(3)
+#define RALINK_FLAGS_24BIT	BIT(4)
+
+#define RALINK_pcm_INT_EN	0
+
+
+struct ralink_pcm_stats {
+	u32 dmafault;
+	u32 overrun;
+	u32 underrun;
+	u32 belowthres;
+};
+
+struct ralink_pcm {
+	struct device *dev;
+	void __iomem *regs;
+	struct clk *clk;
+	struct regmap *regmap;
+	u32 flags;
+	unsigned int fmt;
+	u16 txdma_req;
+	u16 rxdma_req;
+
 	dma_addr_t phys_base;
 
 	struct snd_dmaengine_dai_dma_data playback_dma_data;
 	struct snd_dmaengine_dai_dma_data capture_dma_data;
+
+
+	struct dentry *dbg_dir;
+        struct dentry *dbg_stats;
+		struct dentry *dbg_000glbcfg;
+		struct dentry *dbg_004pcmcfg;
+		struct dentry *dbg_008intstatus;
+		struct dentry *dbg_00cinten;
+		struct dentry *dbg_010cha0ffstatus;
+		struct dentry *dbg_014chb0ffstatus;
+		struct dentry *dbg_020cha0cfg;
+		struct dentry *dbg_024chb0cfg;
+		struct dentry *dbg_030fsynccfg;
+		struct dentry *dbg_034cha0cfg2;
+		struct dentry *dbg_038cfb0cfg2;
+		struct dentry *dbg_040rsvreg16;
+		struct dentry *dbg_050divcompcfg;
+		struct dentry *dbg_054divintcfg;
+		struct dentry *dbg_060digdelaycfg;
+		struct dentry *dbg_080ch0fifo;
+		struct dentry *dbg_084ch1fifo;
+		struct dentry *dbg_088ch2fifo;
+		struct dentry *dbg_08cch3fifo;
+		struct dentry *dbg_110cha1ffstatus;
+		struct dentry *dbg_114chb1ffstatus;
+		struct dentry *dbg_120cha1cfg;
+		struct dentry *dbg_124chb1cfg;
+		struct dentry *dbg_134cha1cfg2;
+		struct dentry *dbg_138chb1cfg2;
+	struct ralink_pcm_stats txstats;
+	struct ralink_pcm_stats rxstats;
 };
 
+struct ralink_pcm *p_gpcm = NULL;
 
+/////DMA
+/*
+#include <linux/dmaengine.h>
 
-static void mt7620a_pcm_shutdown(struct snd_pcm_substream *substream,
-	struct snd_soc_dai *dai)
+static const struct snd_soc_component_driver dmaengine_pcm_component_process = {
+	.name		= SND_DMAENGINE_PCM_DRV_NAME,
+	.probe_order	= SND_SOC_COMP_ORDER_LATE,
+	.ops		= &dmaengine_pcm_process_ops,
+	.pcm_new	= dmaengine_pcm_new,
+};
+
+int my_snd_dmaengine_pcm_register(struct device *dev,
+	const struct snd_dmaengine_pcm_config *config, unsigned int flags)
 {
-	struct mt7620a_pcm *pcm = snd_soc_dai_get_drvdata(dai);
-	uint32_t cfg;
+	struct dmaengine_pcm *pcm;
+	int ret;
 
+	pcm = kzalloc(sizeof(*pcm), GFP_KERNEL);
+	if (!pcm)
+		return -ENOMEM;
+
+#ifdef CONFIG_DEBUG_FS
+	pcm->component.debugfs_prefix = "dma";
+#endif
+	pcm->config = config;
+	pcm->flags = flags;
+
+	ret = dmaengine_pcm_request_chan_of(pcm, dev, config);
+	if (ret)
+		goto err_free_dma;
+
+	if (config && config->process)
+		ret = snd_soc_add_component(dev, &pcm->component,
+					    &dmaengine_pcm_component_process,
+					    NULL, 0);
+	else
+		ret = snd_soc_add_component(dev, &pcm->component,
+					    &dmaengine_pcm_component, NULL, 0);
+	if (ret)
+		goto err_free_dma;
+
+	return 0;
+
+err_free_dma:
+	dmaengine_pcm_release_chan(pcm);
+	kfree(pcm);
+	return ret;
+}
+*/
+
+
+///// end of dma
+
+
+
+
+
+static inline uint32_t ralink_pcm_read(const struct ralink_pcm *pcm,
+	unsigned int reg)
+{
+	//writel(value, pcm->regs + reg);
+	uint32_t value;
+	regmap_read(pcm->regmap, reg, &value);
+	return value;
+}
+
+
+
+static inline void ralink_pcm_write(const struct ralink_pcm *pcm,
+	unsigned int reg, uint32_t value)
+{
+	//writel(value, pcm->regs + reg);
+	regmap_write(pcm->regmap,reg,value);
+}
+
+static void ralink_pcm_debug_dma(struct ralink_pcm *pcm)
+{
+	printk(KERN_ALERT "paly_back:\n" \
+	"addr: 0x%08x , addr_width: 0x%08x, maxburst: %d, slaveid: %d," \
+	"filter_data: 0x%p, chan_name: %s, fifo_size:%d, flags:%d.\n" \
+	"capture:\n" \
+	"addr: 0x%08x , addr_width: 0x%08x, maxburst: %d, slaveid: %d," \
+	"filter_data: 0x%p, chan_name: %s, fifo_size:%d, flags:%d.\n",
+	pcm->playback_dma_data.addr,pcm->playback_dma_data.addr_width,pcm->playback_dma_data.maxburst,
+	pcm->playback_dma_data.slave_id,pcm->playback_dma_data.filter_data,pcm->playback_dma_data.chan_name,
+	pcm->playback_dma_data.fifo_size,pcm->playback_dma_data.flags,
+	pcm->capture_dma_data.addr,pcm->capture_dma_data.addr_width,pcm->capture_dma_data.maxburst,
+	pcm->capture_dma_data.slave_id,pcm->capture_dma_data.filter_data,pcm->capture_dma_data.chan_name,
+	pcm->capture_dma_data.fifo_size,pcm->capture_dma_data.flags
+	);
+}
+
+
+static void ralink_pcm_dump_regs(struct ralink_pcm *pcm)
+{
+	u32 buf[32];
+	int ret;
+
+	ret = regmap_bulk_read(pcm->regmap, PCM_GLB_CFG,
+			buf, ARRAY_SIZE(buf));
+
+	printk(KERN_ALERT "GLB_CFG: 0x%08x, PCM_CFG: 0x%08x, INT_STATUS: 0x%08x, " \
+			"INT_EN: 0x%08x, CHA0_FF_STATUS: 0x%08x, CHB0_FF_STATUS: 0x%08x, " \
+			"CHA0_CFG: 0x%08x, CHB0_CFG: 0x%08x, FSYNC_CFG: 0x%08x, " \
+			"CHA0_CFG2: 0x%08x, CHB0_CFG2: 0x%08x, IP_INFO: 0x%08x," \
+			"DIVCOMP_CFG: 0x%08x, DIVINT_CFG: 0x%08x, DIGDELAY_CFG: 0x%08x\n",
+			buf[0], buf[1], buf[2], buf[3], buf[4],
+			buf[5], buf[8], buf[9], buf[12], buf[13],
+			buf[14], buf[16], buf[20], buf[21], buf[24]);
+}
+
+static int ralink_pcm_set_sysclk(struct snd_soc_dai *dai,
+                              int clk_id, unsigned int freq, int dir)
+{
+	return 0;
+}
+
+
+static int ralink_pcm_set_fmt(struct snd_soc_dai *dai, unsigned int fmt)
+{
+	//struct ralink_pcm *pcm = snd_soc_dai_get_drvdata(dai);
+	//unsigned int cfg0 = 0, cfg1 = 0;
+
+	/* set master/slave audio interface */
+	/*
+	switch (fmt & SND_SOC_DAIFMT_MASTER_MASK) {
+	case SND_SOC_DAIFMT_CBM_CFM:
+		if (pcm->flags & RALINK_FLAGS_TXONLY)
+			cfg0 |= pcm_REG_CFG0_SLAVE_EN;
+		else
+			cfg0 |= pcm_REG_CFG0_SLAVE;
+		break;
+	case SND_SOC_DAIFMT_CBS_CFS:
+		break;
+	default:
+		return -EINVAL;
+	}
+	*/
+	/* interface format */
+	/*
+	switch (fmt & SND_SOC_DAIFMT_FORMAT_MASK) {
+	case SND_SOC_DAIFMT_I2S:
+		break;
+	case SND_SOC_DAIFMT_RIGHT_J:
+		if (pcm->flags & RALINK_FLAGS_RIGHT_J) {
+			cfg1 |= pcm_REG_CFG1_RIGHT_J;
+			break;
+		}
+		return -EINVAL;
+	case SND_SOC_DAIFMT_LEFT_J:
+		if (pcm->flags & RALINK_FLAGS_LEFT_J) {
+			cfg1 |= pcm_REG_CFG1_LEFT_J;
+			break;
+		}
+		return -EINVAL;
+	default:
+		return -EINVAL;
+	}
+	*/
+	/* clock inversion */
+	/*
+	switch (fmt & SND_SOC_DAIFMT_INV_MASK) {
+	case SND_SOC_DAIFMT_NB_NF:
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	if (pcm->flags & RALINK_FLAGS_TXONLY) {
+		regmap_update_bits(pcm->regmap, pcm_REG_CFG0,
+				pcm_REG_CFG0_SLAVE_EN, cfg0);
+	} else {
+		regmap_update_bits(pcm->regmap, pcm_REG_CFG0,
+				pcm_REG_CFG0_SLAVE, cfg0);
+	}
+	regmap_update_bits(pcm->regmap, pcm_REG_CFG1,
+			pcm_REG_CFG1_FMT_MASK, cfg1);
+	pcm->fmt = fmt;
+	*/
+	return 0;
+}
+
+static int ralink_pcm_startup(struct snd_pcm_substream *substream,
+		struct snd_soc_dai *dai)
+{
+	struct ralink_pcm *pcm = snd_soc_dai_get_drvdata(dai);
+
+	if (dai->active)
+		return 0;
+
+	/* setup status interrupt */
+#if (RALINK_pcm_INT_EN)
+	regmap_write(pcm->regmap, pcm_REG_INT_EN, 0xff);
+#else
+	regmap_write(pcm->regmap, pcm_REG_INT_EN, 0x0);
+#endif
+
+	/* enable */
+	regmap_update_bits(pcm->regmap, pcm_REG_CFG0,
+			pcm_REG_CFG0_EN | pcm_REG_CFG0_DMA_EN |
+			pcm_REG_CFG0_THRES_MASK,
+			pcm_REG_CFG0_EN | pcm_REG_CFG0_DMA_EN |
+			pcm_REG_CFG0_DFT_THRES);
+
+	return 0;
+}
+
+static void ralink_pcm_shutdown(struct snd_pcm_substream *substream,
+		struct snd_soc_dai *dai)
+{
+	struct ralink_pcm *pcm = snd_soc_dai_get_drvdata(dai);
+
+	/* If both streams are stopped, disable module and clock */
 	if (dai->active)
 		return;
 
-	cfg = mt7620a_pcm_read(pcm, PCM_GLB_CFG);
-	cfg &= ~PCM_GLB_CFG_EN;
-	mt7620a_pcm_write(pcm, PCM_GLB_CFG, cfg);
+	/*
+	 * datasheet mention when disable all control regs are cleared
+	 * to initial values. need reinit at startup.
+	 */
+	regmap_update_bits(pcm->regmap, pcm_REG_CFG0, pcm_REG_CFG0_EN, 0);
 }
 
-static int mt7620a_pcm_trigger(struct snd_pcm_substream *substream, int cmd,
-	struct snd_soc_dai *dai)
+static int ralink_pcm_hw_params(struct snd_pcm_substream *substream,
+		struct snd_pcm_hw_params *params, struct snd_soc_dai *dai)
 {
-	struct mt7620a_pcm *pcm = snd_soc_dai_get_drvdata(dai);
 
-	uint32_t cfg;
-	uint32_t mask;
+	return 0;
+}
+
+static int ralink_pcm_trigger(struct snd_pcm_substream *substream, int cmd,
+		struct snd_soc_dai *dai)
+{
+	struct ralink_pcm *pcm = snd_soc_dai_get_drvdata(dai);
+	unsigned int mask, val;
 
 	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK)
-		mask = PCM_GLB_CFG_CH0_TX_EN;
+		mask = pcm_REG_CFG0_TX_EN;
 	else
-		mask = PCM_GLB_CFG_CH0_RX_EN;
-
-	cfg = mt7620a_pcm_read(pcm, PCM_GLB_CFG);
+		mask = pcm_REG_CFG0_RX_EN;
 
 	switch (cmd) {
 	case SNDRV_PCM_TRIGGER_START:
 	case SNDRV_PCM_TRIGGER_RESUME:
 	case SNDRV_PCM_TRIGGER_PAUSE_RELEASE:
-		cfg |= mask;
+		val = mask;
 		break;
 	case SNDRV_PCM_TRIGGER_STOP:
 	case SNDRV_PCM_TRIGGER_SUSPEND:
 	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
-		cfg &= ~mask;
+		val = 0;
 		break;
 	default:
 		return -EINVAL;
 	}
 
-	if (cfg & (PCM_GLB_CFG_CH0_TX_EN | PCM_GLB_CFG_CH0_RX_EN))
-		cfg |= PCM_GLB_CFG_DMA_EN;
-	else
-		cfg &= ~PCM_GLB_CFG_DMA_EN;
-
-	mt7620a_pcm_write(pcm, PCM_GLB_CFG, cfg);
+	regmap_update_bits(pcm->regmap, pcm_REG_CFG0, mask, val);
 
 	return 0;
 }
 
-static int mt7620a_pcm_set_fmt(struct snd_soc_dai *dai, unsigned int fmt)
+//配置dma相关信息
+static void ralink_pcm_init_dma_data(struct ralink_pcm *pcm,
+		struct resource *res)
 {
-	struct mt7620a_pcm *pcm = snd_soc_dai_get_drvdata(dai);
-	uint32_t cfg;
+	struct snd_dmaengine_dai_dma_data *dma_data;
 
-	cfg = mt7620a_pcm_read(pcm, PCM_PCM_CFG);
+	/* Playback */
+	dma_data = &pcm->playback_dma_data;
+	dma_data->addr = res->start + PCM_CH0_FIFO;
+	dma_data->addr_width = DMA_SLAVE_BUSWIDTH_4_BYTES;
+	dma_data->maxburst = 16;
+	dma_data->slave_id = pcm->txdma_req;
 
-	switch (fmt & SND_SOC_DAIFMT_MASTER_MASK) {
-	case SND_SOC_DAIFMT_CBS_CFS:
-		cfg &= ~PCM_PCM_CFG_CLKOUT_EN; // pcm clock from external
-        cfg |= PCM_PCM_CFG_EXT_FSYNC; // pcm sync from external
-		break;
-	case SND_SOC_DAIFMT_CBM_CFM:
-		cfg |= PCM_PCM_CFG_CLKOUT_EN; // pcm clock from internal
-        cfg &= ~PCM_PCM_CFG_EXT_FSYNC; // pcm sync from internal
-		break;
-	case SND_SOC_DAIFMT_CBM_CFS:
-	default:
-		return -EINVAL;
+
+	/* Capture */
+	dma_data = &pcm->capture_dma_data;
+	dma_data->addr = res->start + PCM_CH0_FIFO;
+	dma_data->addr_width = DMA_SLAVE_BUSWIDTH_4_BYTES;
+	dma_data->maxburst = 16;
+	dma_data->slave_id = pcm->rxdma_req;
+}
+
+static int ralink_pcm_dai_probe(struct snd_soc_dai *dai)
+{
+	struct ralink_pcm *pcm = snd_soc_dai_get_drvdata(dai);
+
+	snd_soc_dai_init_dma_data(dai, &pcm->playback_dma_data,
+			&pcm->capture_dma_data);
+
+	return 0;
+}
+
+static int ralink_pcm_dai_remove(struct snd_soc_dai *dai)
+{
+	return 0;
+}
+
+static const struct snd_soc_dai_ops ralink_pcm_dai_ops = {
+	.set_sysclk = ralink_pcm_set_sysclk,
+	.set_fmt = ralink_pcm_set_fmt,
+	.startup = ralink_pcm_startup,
+	.shutdown = ralink_pcm_shutdown,
+	.hw_params = ralink_pcm_hw_params,
+	.trigger = ralink_pcm_trigger,
+};
+
+static struct snd_soc_dai_driver ralink_pcm_dai = {
+	.name = DRV_NAME,
+	.probe = ralink_pcm_dai_probe,
+	.remove = ralink_pcm_dai_remove,
+	.ops = &ralink_pcm_dai_ops,
+	.capture = {
+		.stream_name = "pcm Capture",
+		.channels_min = 2,
+		.channels_max = 2,
+		.rate_min = 5512,
+		.rate_max = 192000,
+		.rates = SNDRV_PCM_RATE_CONTINUOUS,
+		.formats = SNDRV_PCM_FMTBIT_S16_LE,
+	},
+	.playback = {
+		.stream_name = "pcm Playback",
+		.channels_min = 2,
+		.channels_max = 2,
+		.rate_min = 5512,
+		.rate_max = 192000,
+		.rates = SNDRV_PCM_RATE_CONTINUOUS,
+		.formats = SNDRV_PCM_FMTBIT_S16_LE,
+	},
+	.symmetric_rates = 1,
+};
+
+static struct snd_pcm_hardware ralink_pcm_hardware = {
+	.info = SNDRV_PCM_INFO_MMAP |
+		SNDRV_PCM_INFO_MMAP_VALID |
+		SNDRV_PCM_INFO_INTERLEAVED |
+		SNDRV_PCM_INFO_BLOCK_TRANSFER,
+	.formats = SNDRV_PCM_FMTBIT_S16_LE,
+	.channels_min		= 2,
+	.channels_max		= 2,
+	.period_bytes_min	= PAGE_SIZE,
+	.period_bytes_max	= PAGE_SIZE * 2,
+	.periods_min		= 2,
+	.periods_max		= 128,
+	.buffer_bytes_max	= 128 * 1024,
+	.fifo_size		= 32,
+};
+
+static const struct snd_dmaengine_pcm_config ralink_dmaengine_pcm_config = {
+	.prepare_slave_config = snd_dmaengine_pcm_prepare_slave_config,
+	.pcm_hardware = &ralink_pcm_hardware,
+	.prealloc_buffer_size = 256 * PAGE_SIZE,
+};
+
+static const struct snd_soc_component_driver ralink_pcm_component = {
+	.name = DRV_NAME,
+};
+
+static bool ralink_pcm_readable_reg(struct device *dev, unsigned int reg)
+{
+	return true;
+}
+
+static bool ralink_pcm_volatile_reg(struct device *dev, unsigned int reg)
+{
+	switch (reg) {
+	case PCM_INT_STATUS:
+	case PCM_CHA0_FF_STATUS:
+	case PCM_CHB0_FF_STATUS:
+	case PCM_CHA1_FF_STATUS:
+	case PCM_CHB1_FF_STATUS:
+		return true;
 	}
-    
-	mt7620a_pcm_write(pcm, PCM_PCM_CFG, cfg);
+	return false;
+}
+
+static bool ralink_pcm_writeable_reg(struct device *dev, unsigned int reg)
+{
+	switch (reg) {
+	case PCM_IP_INFO:
+		return false;
+	}
+	return true;
+}
+
+static const struct regmap_config ralink_pcm_regmap_config = {
+	.reg_bits = 32,
+	.reg_stride = 4,
+	.val_bits = 32,
+	.writeable_reg = ralink_pcm_writeable_reg,
+	.readable_reg = ralink_pcm_readable_reg,
+	.volatile_reg = ralink_pcm_volatile_reg,
+	.max_register = PCM_CHB1_CFG2,
+};
+
+#if (RALINK_pcm_INT_EN)
+static irqreturn_t ralink_pcm_irq(int irq, void *devid)
+{
+	struct ralink_pcm *pcm = devid;
+	u32 status;
+
+	regmap_read(pcm->regmap, pcm_REG_INT_STATUS, &status);
+	if (unlikely(!status))
+		return IRQ_NONE;
+
+	/* tx stats */
+	if (status & pcm_REG_INT_TX_MASK) {
+		if (status & pcm_REG_INT_TX_THRES)
+			pcm->txstats.belowthres++;
+		if (status & pcm_REG_INT_TX_UNRUN)
+			pcm->txstats.underrun++;
+		if (status & pcm_REG_INT_TX_OVRUN)
+			pcm->txstats.overrun++;
+		if (status & pcm_REG_INT_TX_FAULT)
+			pcm->txstats.dmafault++;
+	}
+
+	/* rx stats */
+	if (status & pcm_REG_INT_RX_MASK) {
+		if (status & pcm_REG_INT_RX_THRES)
+			pcm->rxstats.belowthres++;
+		if (status & pcm_REG_INT_RX_UNRUN)
+			pcm->rxstats.underrun++;
+		if (status & pcm_REG_INT_RX_OVRUN)
+			pcm->rxstats.overrun++;
+		if (status & pcm_REG_INT_RX_FAULT)
+			pcm->rxstats.dmafault++;
+	}
+
+	/* clean status bits */
+	regmap_write(pcm->regmap, pcm_REG_INT_STATUS, status);
+
+	return IRQ_HANDLED;
+}
+#endif
+
+//#if IS_ENABLED(CONFIG_DEBUG_FS)
+#if 1
+static int ralink_pcm_stats_show(struct seq_file *s, void *unused)
+{
+        struct ralink_pcm *pcm = s->private;
+
+	seq_printf(s, "tx stats\n");
+	seq_printf(s, "\tbelow threshold\t%u\n", pcm->txstats.belowthres);
+	seq_printf(s, "\tunder run\t%u\n", pcm->txstats.underrun);
+	seq_printf(s, "\tover run\t%u\n", pcm->txstats.overrun);
+	seq_printf(s, "\tdma fault\t%u\n", pcm->txstats.dmafault);
+
+	seq_printf(s, "rx stats\n");
+	seq_printf(s, "\tbelow threshold\t%u\n", pcm->rxstats.belowthres);
+	seq_printf(s, "\tunder run\t%u\n", pcm->rxstats.underrun);
+	seq_printf(s, "\tover run\t%u\n", pcm->rxstats.overrun);
+	seq_printf(s, "\tdma fault\t%u\n", pcm->rxstats.dmafault);
+
+	ralink_pcm_dump_regs(pcm);
+
 	return 0;
 }
 
-static int mt7620a_pcm_hw_params(struct snd_pcm_substream *substream,
-	struct snd_pcm_hw_params *params, struct snd_soc_dai *dai)
+static int ralink_pcm_stats_open(struct inode *inode, struct file *file)
 {
+        return single_open(file, ralink_pcm_stats_show, inode->i_private);
+}
 
+static const struct file_operations ralink_pcm_stats_ops = {
+        .open = ralink_pcm_stats_open,
+        .read = seq_read,
+        .llseek = seq_lseek,
+        .release = single_release,
+};
+
+//////////////////////////////////////寄存器读写//////////////////////////////////
+
+struct file_disc{
+	bool                 is_open;
+	size_t               size;
+	bool				 is_already;
+};
+
+#define RALINK_PCM_OPEN(__attr_name) \
+static int ralink_open ## __attr_name(struct inode *inode, struct file *file) \
+{  \
+	struct file_disc* this = kzalloc(sizeof(*this), GFP_KERNEL);  \
+	this->is_open = true;  \
+	this->size = 0;  \
+	this->is_already = 0;  \
+	file->private_data = this;  \
+    return 0;  \
+}
+
+#define RALINK_PCM_READ(__attr_name, __addr) \
+static ssize_t ralink_read ## __attr_name(struct file* file, char __user* buff, size_t count, loff_t* ppos) \
+{ \
+	uint32_t value; \
+	int status; \
+	struct file_disc* this = file->private_data; \
+	if(1 == this->is_already) return 0; \
+	regmap_read(p_gpcm->regmap, __addr, &value); \
+	status = sprintf(buff, "0x%08x\r\n", value); \
+	ppos+=status; \
+	this->is_already=1; \
+    return status; \
+}
+
+#define RALINK_PCM_WRITE(__attr_name, __addr) \
+static int ralink_write ## __attr_name(struct file* file, const char __user* buff, size_t count, loff_t* ppos) \
+{ \
+	unsigned long value=0; \
+	int nret; \
+	char tbuf[16]={0}; \
+	if(count > 15) return count; \
+	memcpy(tbuf, buff, count); \
+	tbuf[count] = 0; \
+	nret = kstrtoul(tbuf, 0, &value); \
+	if ( nret != 0) return count; \
+	regmap_write(p_gpcm->regmap,__addr,value); \
+	return count; \
+}
+
+#define RALINK_PCM_RELEASE(__attr_name) \
+static int ralink_release ## __attr_name(struct inode *inode, struct file *file) \
+{ \
+    struct file_disc* this = file->private_data; \
+    if (this != NULL) kfree(this); \
+    return 0; \
+}
+
+#define RALINK_PCM_FILE_OP(__attr_name) \
+static const struct file_operations ralink_pcm_ops ## __attr_name = { \
+        .open = ralink_open ## __attr_name, \
+        .read = ralink_read ## __attr_name, \
+		.write = ralink_write ## __attr_name, \
+        .llseek = seq_lseek, \
+        .release = ralink_release ## __attr_name, \
+};
+
+RALINK_PCM_OPEN(_000glbcfg);
+RALINK_PCM_READ(_000glbcfg, 0x0);
+RALINK_PCM_WRITE(_000glbcfg, 0x0);
+RALINK_PCM_RELEASE(_000glbcfg);
+RALINK_PCM_FILE_OP(_000glbcfg);
+
+RALINK_PCM_OPEN(_004pcmcfg);
+RALINK_PCM_READ(_004pcmcfg, 0x4);
+RALINK_PCM_WRITE(_004pcmcfg, 0x4);
+RALINK_PCM_RELEASE(_004pcmcfg);
+RALINK_PCM_FILE_OP(_004pcmcfg);
+
+
+RALINK_PCM_OPEN(_030fsynccfg);
+RALINK_PCM_READ(_030fsynccfg, 0x30);
+RALINK_PCM_WRITE(_030fsynccfg, 0x30);
+RALINK_PCM_RELEASE(_030fsynccfg);
+RALINK_PCM_FILE_OP(_030fsynccfg);
+
+
+RALINK_PCM_OPEN(_050divcompcfg);
+RALINK_PCM_READ(_050divcompcfg, 0x50);
+RALINK_PCM_WRITE(_050divcompcfg, 0x50);
+RALINK_PCM_RELEASE(_050divcompcfg);
+RALINK_PCM_FILE_OP(_050divcompcfg);
+
+RALINK_PCM_OPEN(_054divintcfg);
+RALINK_PCM_READ(_054divintcfg, 0x54);
+RALINK_PCM_WRITE(_054divintcfg, 0x54);
+RALINK_PCM_RELEASE(_054divintcfg);
+RALINK_PCM_FILE_OP(_054divintcfg);
+
+RALINK_PCM_OPEN(_080ch0fifo);
+RALINK_PCM_READ(_080ch0fifo, 0x80);
+RALINK_PCM_WRITE(_080ch0fifo, 0x80);
+RALINK_PCM_RELEASE(_080ch0fifo);
+RALINK_PCM_FILE_OP(_080ch0fifo);
+
+
+#define RALINK_PCM_CREATE(__attr_name , __name) \
+pcm->dbg ##__attr_name = debugfs_create_file(__name,S_IRUGO, \
+	pcm->dbg_dir, pcm, &ralink_pcm_ops ##__attr_name); \
+if (!pcm->dbg ##__attr_name) { \
+    debugfs_remove(pcm->dbg_dir); \
+    return -ENOMEM; \
+}
+
+static inline int ralink_pcm_debugfs_create(struct ralink_pcm *pcm)
+{
+        pcm->dbg_dir = debugfs_create_dir(dev_name(pcm->dev), NULL);
+        if (!pcm->dbg_dir)
+                return -ENOMEM;
+
+        pcm->dbg_stats = debugfs_create_file("stats", S_IRUGO,
+                        pcm->dbg_dir, pcm, &ralink_pcm_stats_ops);
+        if (!pcm->dbg_stats) {
+                debugfs_remove(pcm->dbg_dir);
+                return -ENOMEM;
+        }
+		RALINK_PCM_CREATE(_000glbcfg,"000_glb_cfg");
+		RALINK_PCM_CREATE(_004pcmcfg,"004_pcm_cfg");
+		RALINK_PCM_CREATE(_030fsynccfg,"030_fsync_cfg");
+		RALINK_PCM_CREATE(_050divcompcfg,"050_divcomp_cfg");
+		RALINK_PCM_CREATE(_054divintcfg,"054_divint_cfg");
+		RALINK_PCM_CREATE(_080ch0fifo,"080_ch0_fifo");
+
+        return 0;
+}
+
+static inline void ralink_pcm_debugfs_remove(struct ralink_pcm *pcm)
+{
+	debugfs_remove(pcm->dbg_stats);
+	debugfs_remove(pcm->dbg_000glbcfg);
+	debugfs_remove(pcm->dbg_004pcmcfg);
+	debugfs_remove(pcm->dbg_030fsynccfg);
+	debugfs_remove(pcm->dbg_050divcompcfg);
+	debugfs_remove(pcm->dbg_054divintcfg);
+	debugfs_remove(pcm->dbg_080ch0fifo);
+
+	debugfs_remove(pcm->dbg_dir);
+}
+
+//////////////////////////////////////寄存器读写结束//////////////////////////////////
+#else
+static inline int ralink_pcm_debugfs_create(struct ralink_pcm *pcm)
+{
 	return 0;
+}
+
+static inline void ralink_pcm_debugfs_remove(struct fsl_ssi_dbg *ssi_dbg)
+{
+}
+#endif
+
+/*
+ * TODO: these refclk setup functions should use
+ * clock framework instead. hardcode it now.
+ */
+static void rt3350_refclk_setup(void)
+{
+	uint32_t data;
+
+	/* set refclk output 12Mhz clock */
+	data = rt_sysc_r32(0x2c);
+	data |= (0x1 << 8);
+	rt_sysc_w32(data, 0x2c);
+}
+
+static void rt3883_refclk_setup(void)
+{
+	uint32_t data;
+
+	/* set refclk output 12Mhz clock */
+	data = rt_sysc_r32(0x2c);
+	data &= ~(0x3 << 13);
+	data |= (0x1 << 13);
+	rt_sysc_w32(data, 0x2c);
+}
+
+static void rt3552_refclk_setup(void)
+{
+	uint32_t data;
+
+	/* set refclk output 12Mhz clock */
+	data = rt_sysc_r32(0x2c);
+	data &= ~(0xf << 8);
+	data |= (0x3 << 8);
+	rt_sysc_w32(data, 0x2c);
+}
+
+static void mt7620_refclk_setup(void)
+{
+	uint32_t data;
+
+	/* set refclk output 12Mhz clock */
+	data = rt_sysc_r32(0x2c);
+	data &= ~(0x7 << 9);
+	data |= 0x1 << 9;
+	rt_sysc_w32(data, 0x2c);
+}
+
+static void mt7621_refclk_setup(void)
+{
+	uint32_t data;
+
+	/* set refclk output 12Mhz clock */
+	data = rt_sysc_r32(0x2c);
+	data &= ~(0x1f << 18);
+	data |= (0x19 << 18);
+	data &= ~(0x1f << 12);
+	data |= (0x1 << 12);
+	data &= ~(0x7 << 9);
+	data |= (0x5 << 9);
+	rt_sysc_w32(data, 0x2c);
+}
+
+static void mt7628_refclk_setup(void)
+{
+	uint32_t data;
+
+	/* set pcm and refclk digital pad */
+	data = rt_sysc_r32(0x3c);
+	data |= 0x1f;
+	rt_sysc_w32(data, 0x3c);
+
+	/* Adjust REFCLK0's driving strength */
+	data = rt_sysc_r32(0x1354);
+	data &= ~(0x1 << 5);
+	rt_sysc_w32(data, 0x1354);
+	data = rt_sysc_r32(0x1364);
+	data |= ~(0x1 << 5);
+	rt_sysc_w32(data, 0x1364);
+
+	/* set refclk output 12Mhz clock */
+	data = rt_sysc_r32(0x2c);
+	data &= ~(0x7 << 9);
+	data |= 0x1 << 9;
+	rt_sysc_w32(data, 0x2c);
 }
 
 #define PCMCLOCK_OUT 0 // 256KHz
@@ -172,260 +910,303 @@ unsigned long i2sMaster_inclk_int[11] = {
 unsigned long i2sMaster_inclk_comp[11] = {
 	64,     352,    42,     32,     176,    21,     272,    88,     10,     455,    261};
 
-//FreqOut = FreqIn *(1/2) *{1 / [DIVINT+DIVCOMP/(512)]}
 
-static int mt7620a_pcm_set_sysclk(struct snd_soc_dai *dai, int clk_id,
-	unsigned int freq, int dir)
+//寄存器初始化尽量都在这里完成
+static int ralink_pcm_setup(struct ralink_pcm *pcm)
 {
-    struct mt7620a_pcm *pcm = snd_soc_dai_get_drvdata(dai);
-
-	printk("Internal REFCLK with fractional division\n");
-
-    //When using the external clock, the frequency clock
-    //should be equal to the PCM_clock out. Otherwise, the
-    //PCM_CLKin should be 8.192 MHz.
-	mt7620a_pcm_write(pcm, PCM_DIVINT_CFG, i2sMaster_inclk_int[PCMCLOCK_OUT]);
-	mt7620a_pcm_write(pcm, PCM_DIVCOMP_CFG, i2sMaster_inclk_comp[PCMCLOCK_OUT] | PCM_DIVCOMP_CFG_CLK_EN);
-	return 0;
-}
-
-static int mt7620a_pcm_suspend(struct snd_soc_dai *dai)
-{
-	struct mt7620a_pcm *pcm = snd_soc_dai_get_drvdata(dai);
 	uint32_t cfg;
+	uint32_t tread=0;
+	uint32_t twrite=0x89abcdef;
+	uint8_t clock_external = 0;
 
-	if (dai->active) {
-		cfg = mt7620a_pcm_read(pcm, PCM_GLB_CFG);
-		cfg &= ~PCM_GLB_CFG_CH0_TX_EN;
-		mt7620a_pcm_write(pcm, PCM_GLB_CFG, cfg);
+	printk(KERN_ALERT "ralink_pcm_setup\n");
+	//和snd不同的是,这里的寄存器尽量一次性配置完成
+
+	//1.Set PCM_CFG
+	regmap_read(pcm->regmap, PCM_PCM_CFG, &cfg);	//默认情况下,应该是0x03000000
+	
+	cfg = 0x03000000;
+
+	//默认使用内部时钟源
+	if(0 == clock_external)
+	{
+		cfg |= PCM_PCM_CFG_CLKOUT_EN; // pcm clock from internal
+        cfg &= ~PCM_PCM_CFG_EXT_FSYNC; // pcm sync from internal
 	}
-
-	return 0;
-}
-
-static int mt7620a_pcm_resume(struct snd_soc_dai *dai)
-{
-	struct mt7620a_pcm *pcm = snd_soc_dai_get_drvdata(dai);
-	uint32_t cfg;
-
-	if (dai->active) {
-		cfg = mt7620a_pcm_read(pcm, PCM_GLB_CFG);
-		cfg |= PCM_GLB_CFG_CH0_TX_EN;
-		mt7620a_pcm_write(pcm, PCM_GLB_CFG, cfg);
+	else
+	{
+		cfg &= ~PCM_PCM_CFG_CLKOUT_EN; // pcm clock from external
+        cfg |= PCM_PCM_CFG_EXT_FSYNC; // pcm sync from external
 	}
-
-	return 0;
-}
-
-static void mt7620a_init_pcm_config(struct mt7620a_pcm *pcm)
-{
-	struct snd_dmaengine_dai_dma_data *dma_data;
-
-	/* Playback */
-	dma_data = &pcm->playback_dma_data;
-	dma_data->maxburst = 16;
-	dma_data->slave_id = 6;
-	dma_data->addr = pcm->phys_base + PCM_CH0_FIFO; //only use channel 0
-
-	/* Capture */
-	dma_data = &pcm->capture_dma_data;
-	dma_data->maxburst = 16;
-	dma_data->slave_id = 4;
-	dma_data->addr = pcm->phys_base + PCM_CH0_FIFO;
-}
-
-static int mt7620a_pcm_dai_probe(struct snd_soc_dai *dai)
-{
-	struct mt7620a_pcm *pcm = snd_soc_dai_get_drvdata(dai);
-	uint32_t cfg;
-
-	mt7620a_init_pcm_config(pcm);
-	dai->playback_dma_data = &pcm->playback_dma_data;
-	dai->capture_dma_data = &pcm->capture_dma_data;
-
-	printk("Internal REFCLK with fractional division\n");
-    
-	mt7620a_pcm_write(pcm, PCM_GLB_CFG, PCM_GLB_CFG_DFT_THRES);
-	mt7620a_pcm_write(pcm, PCM_INT_EN, 0);
-    
-    ///////////// pcm general config
-    cfg = mt7620a_pcm_read(pcm, PCM_FSYNC_CFG);
-    //cfg &= ~PCM_PCM_CFG_LONG_FSYNC; //short sync mode
-    cfg |= PCM_PCM_CFG_LONG_FSYNC; //long sync mode
+	cfg |= PCM_PCM_CFG_LONG_FSYNC; //long sync mode
     cfg |= PCM_PCM_CFG_FSYNC_POL; // sync high active
-    
-    //slot mode, pcm clock = 256KHz
-    cfg &= ~(0x07);
-    cfg = 0; // 4 slots
-   
-	mt7620a_pcm_write(pcm, PCM_PCM_CFG, cfg);
-    
-    ///////////// pcm sync config
-    cfg = mt7620a_pcm_read(pcm, PCM_FSYNC_CFG);
-    // pol, etc.
-    
-    mt7620a_pcm_write(pcm, PCM_FSYNC_CFG, cfg);
-    
-    //When using the external clock, the frequency clock
-    //should be equal to the PCM_clock out. Otherwise, the
-    //PCM_CLKin should be 8.192 MHz.
-	mt7620a_pcm_write(pcm, PCM_DIVINT_CFG, i2sMaster_inclk_int[PCMCLOCK_OUT]);
-	mt7620a_pcm_write(pcm, PCM_DIVCOMP_CFG, i2sMaster_inclk_comp[PCMCLOCK_OUT] | PCM_DIVCOMP_CFG_CLK_EN);
 
+	//SLOT模式 先默认4槽位,后面再修改
+	regmap_write(pcm->regmap, PCM_PCM_CFG, cfg);
+
+	//2.暂时不使用中断
+	regmap_write(pcm->regmap, PCM_INT_EN, 0);
+
+
+	//设置同步模式
+	cfg = 
+	regmap_write(pcm->regmap, PCM_FSYNC_CFG, cfg);
+
+	//设置时钟
+	regmap_write(pcm->regmap, PCM_DIVINT_CFG, i2sMaster_inclk_int[PCMCLOCK_OUT]);
+	regmap_write(pcm->regmap, PCM_DIVCOMP_CFG, i2sMaster_inclk_comp[PCMCLOCK_OUT] | PCM_DIVCOMP_CFG_CLK_EN);
+	
+	
+
+	//使能PCM
+	//PCM全局寄存器 default 0x00440000
+	regmap_read(pcm->regmap, PCM_GLB_CFG, &cfg);
+
+	cfg = 0x00440000;
+	cfg |= PCM_GLB_CFG_DFT_THRES;
+	cfg |= PCM_GLB_CFG_EN;
+	//cfg |= PCM_GLB_CFG_LBK_EN;
+	//cfg |= PCM_GLB_CFG_EXT_LBK_EN;
+	cfg |= PCM_GLB_CFG_CH0_RX_EN;
+	//cfg |= PCM_GLB_CFG_DMA_EN;
+
+	regmap_write(pcm->regmap,PCM_GLB_CFG,cfg);
+
+	regmap_read(pcm->regmap, PCM_CH0_FIFO, &tread);
+	printk(KERN_ALERT "tread ret:%08x\r\n",tread);
+	regmap_write(pcm->regmap,PCM_CH0_FIFO,twrite);
+
+	regmap_read(pcm->regmap, PCM_CH0_FIFO, &tread);
+	printk(KERN_ALERT "tread ret:%08x\r\n",tread);
+	regmap_read(pcm->regmap, PCM_CH0_FIFO, &tread);
+	printk(KERN_ALERT "tread ret:%08x\r\n",tread);
 	return 0;
 }
 
-static int mt7620a_pcm_dai_remove(struct snd_soc_dai *dai)
+
+struct rt_pcm_data {
+	u32 flags;
+	void (*refclk_setup)(void);
+};
+
+struct rt_pcm_data rt3050_pcm_data = { .flags = RALINK_FLAGS_TXONLY };
+struct rt_pcm_data rt3350_pcm_data = { .flags = RALINK_FLAGS_TXONLY,
+	.refclk_setup = rt3350_refclk_setup };
+struct rt_pcm_data rt3883_pcm_data = {
+	.flags = (RALINK_FLAGS_LEFT_J | RALINK_FLAGS_RIGHT_J),
+	.refclk_setup = rt3883_refclk_setup };
+struct rt_pcm_data rt3352_pcm_data = { .refclk_setup = rt3552_refclk_setup};
+struct rt_pcm_data mt7620_pcm_data = { .refclk_setup = mt7620_refclk_setup};
+struct rt_pcm_data mt7621_pcm_data = { .refclk_setup = mt7621_refclk_setup};
+struct rt_pcm_data mt7628_pcm_data = {
+	.flags = (RALINK_FLAGS_ENDIAN | RALINK_FLAGS_24BIT |
+			RALINK_FLAGS_LEFT_J),
+	.refclk_setup = mt7628_refclk_setup};
+
+static const struct of_device_id ralink_pcm_match_table[] = {
+	{ .compatible = "mediatek,mt7621-pcm",
+		.data = (void *)&mt7621_pcm_data },
+	{ .compatible = "ralink,mt7620a-pcm",
+		.data = (void *)&mt7628_pcm_data },
+};
+MODULE_DEVICE_TABLE(of, ralink_pcm_match_table);
+
+static int ralink_pcm_probe(struct platform_device *pdev)
 {
-	return 0;
-}
+	const struct of_device_id *match;
+	struct ralink_pcm *pcm;
+	struct resource *res;
+	int irq, ret;
+	struct rt_pcm_data *data;
+	printk(KERN_ALERT "ralink_pcm_probe\n");
 
-static const struct snd_soc_dai_ops mt7620a_pcm_dai_ops = {
-	.startup = mt7620a_pcm_startup,
-	.shutdown = mt7620a_pcm_shutdown,
-	.trigger = mt7620a_pcm_trigger,
-	.hw_params = mt7620a_pcm_hw_params,
-	.set_fmt = mt7620a_pcm_set_fmt,
-	.set_sysclk = mt7620a_pcm_set_sysclk,
-};
 
-#define RT5350_PCM_FMTS (SNDRV_PCM_FMTBIT_S8 | \
-		SNDRV_PCM_FMTBIT_S16_LE)
-
-static struct snd_soc_dai_driver mt7620a_pcm_dai = {
-	.probe = mt7620a_pcm_dai_probe,
-	.remove = mt7620a_pcm_dai_remove,
-	.playback = {
-		.channels_min = 1,
-		.channels_max = 2,
-		.rates = SNDRV_PCM_RATE_8000_48000,
-		.formats = RT5350_PCM_FMTS,
-	},
-	.capture = {
-		.channels_min = 2,
-		.channels_max = 2,
-		.rates = SNDRV_PCM_RATE_8000_48000,
-		.formats = RT5350_PCM_FMTS,
-	},
-	.symmetric_rates = 1,
-	.ops = &mt7620a_pcm_dai_ops,
-	.suspend = mt7620a_pcm_suspend,
-	.resume = mt7620a_pcm_resume,
-};
-
-static const struct snd_pcm_hardware mt7620_pcm_hardware = {
-	.info = SNDRV_PCM_INFO_MMAP |
-		SNDRV_PCM_INFO_MMAP_VALID |
-		SNDRV_PCM_INFO_INTERLEAVED |
-		SNDRV_PCM_INFO_BLOCK_TRANSFER,
-	.formats = SNDRV_PCM_FMTBIT_S16_LE | SNDRV_PCM_FMTBIT_S8,
-	.period_bytes_min	= 128,//PAGE_SIZE,
-	.period_bytes_max	= 64 * 1024,
-	.periods_min		= 2,
-	.periods_max		= 128,
-	.buffer_bytes_max	= 128 * 1024,
-	.fifo_size		= 32,
-};
-
-static const struct snd_dmaengine_pcm_config mt7620a_dmaengine_pcm_config = {
-	.prepare_slave_config = snd_dmaengine_pcm_prepare_slave_config,
-	.pcm_hardware = &mt7620_pcm_hardware,
-	.prealloc_buffer_size = 256 * PAGE_SIZE,
-};
-
-static const struct snd_soc_component_driver mt7620a_pcm_component = {
-	.name = "mt7620a-pcm",
-};
-
-static int mt7620a_pcm_dev_probe(struct platform_device *pdev)
-{
-	struct mt7620a_pcm *pcm;
-	int ret;
-
-	snd_dmaengine_pcm_register(&pdev->dev,
-		&mt7620a_dmaengine_pcm_config,
-		SND_DMAENGINE_PCM_FLAG_COMPAT);
-
-	pcm = kzalloc(sizeof(*pcm), GFP_KERNEL);
+	pcm = devm_kzalloc(&pdev->dev, sizeof(*pcm), GFP_KERNEL);
 	if (!pcm)
 		return -ENOMEM;
-
-	pcm->mem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	if (!pcm->mem) {
-		ret = -ENOENT;
-		goto err_free;
-	}
-
-	pcm->mem = request_mem_region(pcm->mem->start, resource_size(pcm->mem),
-				pdev->name);
-	if (!pcm->mem) {
-		ret = -EBUSY;
-		goto err_free;
-	}
-
-	pcm->base = ioremap_nocache(pcm->mem->start, resource_size(pcm->mem));
-	if (!pcm->base) {
-		ret = -EBUSY;
-		goto err_release_mem_region;
-	}
-
-	pcm->phys_base = pcm->mem->start;
-
+	printk(KERN_ALERT "platform_set_drvdata\n");
 	platform_set_drvdata(pdev, pcm);
-	ret = snd_soc_register_component(&pdev->dev, &mt7620a_pcm_component,
-					 &mt7620a_pcm_dai, 1);
+	pcm->dev = &pdev->dev;
+	printk(KERN_ALERT "of_match_device\n");
+	match = of_match_device(ralink_pcm_match_table, &pdev->dev);
+	if (!match) {
+		printk(KERN_ALERT "of_property_read_u32 ret:%d\r\n",ret);
+		return -EINVAL;
+	}
+	data = (struct rt_pcm_data *)match->data;
+	pcm->flags = data->flags;
+	/* setup out 12Mhz refclk to codec as mclk */
+	if (data->refclk_setup)
+		data->refclk_setup();
 
-	if (!ret) {
-		dev_err(&pdev->dev, "loaded\n");
+	/*
+	struct device_node *np = pdev->dev.of_node;
+	u32 dma_req;
+	if (of_property_read_u32(np, "txdma-req", &dma_req)) {
+		dev_err(&pdev->dev, "no txdma-req define\n");
+		printk(KERN_ALERT "of_property_read_u32 ret:%d\r\n",ret);
+		//return -EINVAL;
+	}
+	pcm->txdma_req = (u16)dma_req;
+	if (!(pcm->flags & RALINK_FLAGS_TXONLY)) {
+		if (of_property_read_u32(np, "rxdma-req", &dma_req)) {
+			dev_err(&pdev->dev, "no rxdma-req define\n");
+			printk(KERN_ALERT "of_property_read_u32 ret:%d\r\n",ret);
+			//return -EINVAL;
+		}
+		pcm->rxdma_req = (u16)dma_req;
+	}
+	*/
+	//上面是从dts读取dma配置的代码,暂时写死
+	pcm->rxdma_req = 4;
+	pcm->txdma_req = 6;
+
+	printk(KERN_ALERT "platform_get_resource\n");
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	pcm->regs = devm_ioremap_resource(&pdev->dev, res);
+	if (IS_ERR(pcm->regs)) {
+		printk(KERN_ALERT "platform_get_resource ret:%d\r\n",ret);
+		return PTR_ERR(pcm->regs);
+	}
+	printk(KERN_ALERT "devm_regmap_init_mmio\n");
+	pcm->regmap = devm_regmap_init_mmio(&pdev->dev, pcm->regs,
+			&ralink_pcm_regmap_config);
+	if (IS_ERR(pcm->regmap)) {
+		printk(KERN_ALERT "devm_regmap_init_mmio ret:%d\r\n",ret);
+		dev_err(&pdev->dev, "regmap init failed\n");
+		return PTR_ERR(pcm->regmap);
+	}
+
+	printk(KERN_ALERT "ralink_pcm_setup\n");
+	ret = ralink_pcm_setup(pcm);
+	if(0 != ret)
+	{
+		printk(KERN_ALERT "ralink_pcm_setup failed,ret:%d\r\n",ret);
+	}
+	printk(KERN_ALERT "platform_get_irq\n");
+    irq = platform_get_irq(pdev, 0);
+    if (irq < 0) {
+			printk(KERN_ALERT "platform_get_irq ret:%d\r\n",ret);
+            dev_err(&pdev->dev, "failed to get irq\n");
+            return -EINVAL;
+    }
+
+#if (RALINK_pcm_INT_EN)
+	ret = devm_request_irq(&pdev->dev, irq, ralink_pcm_irq,
+			0, dev_name(&pdev->dev), pcm);
+	if (ret) {
+		printk(KERN_ALERT "devm_request_irq ret:%d\r\n",ret);
+		dev_err(&pdev->dev, "failed to request irq\n");
 		return ret;
 	}
+#endif
+	printk(KERN_ALERT "devm_clk_get\n");
+	pcm->clk = devm_clk_get(&pdev->dev, NULL);
+	if (IS_ERR(pcm->clk)) {
+		dev_err(&pdev->dev, "no clock defined\n");
+		printk(KERN_ALERT "devm_clk_get ret:%d\r\n",ret);
+		//return PTR_ERR(pcm->clk);
+	}
 
-	dev_err(&pdev->dev, "Failed to register DAI\n");
-	iounmap(pcm->base);
+	/*
+	ret = clk_prepare_enable(pcm->clk);
+	if (ret)
+	{
+		printk(KERN_ALERT "clk_prepare_enable ret:%d\r\n",ret);
+		//return ret;
+	}
+	*/
 
-err_release_mem_region:
-	release_mem_region(pcm->mem->start, resource_size(pcm->mem));
-err_free:
-	kfree(pcm);
+	p_gpcm = pcm;
 
+	//device_reset(&pdev->dev);
+	printk(KERN_ALERT "ralink_pcm_debugfs_create\n");
+	ret = ralink_pcm_debugfs_create(pcm);
+	if (ret) {
+		printk(KERN_ALERT "ralink_pcm_debugfs_create ret:%d\r\n",ret);
+		dev_err(&pdev->dev, "create debugfs failed\n");
+		goto err_clk_disable;
+	}
+	printk(KERN_ALERT "devm_snd_soc_register_component\n");
+	ret = devm_snd_soc_register_component(&pdev->dev, &ralink_pcm_component,
+			&ralink_pcm_dai, 1);
+	if (ret)
+	{
+		printk(KERN_ALERT "devm_snd_soc_register_component ret:%d\r\n",ret);
+		goto err_debugfs;
+	}
+
+	//DMA相关
+	///*
+	printk(KERN_ALERT "ralink_pcm_init_dma_data\n");
+	ralink_pcm_init_dma_data(pcm, res);
+
+	printk(KERN_ALERT "ralink_pcm_init_dma_data ok\r\n");
+
+	//snd_dmaengine_pcm_register(&pdev->dev,
+	//				&ralink_dmaengine_pcm_config,
+	//				SND_DMAENGINE_PCM_FLAG_COMPAT);
+	printk(KERN_ALERT "devm_snd_dmaengine_pcm_register\n");
+	ret = devm_snd_dmaengine_pcm_register(&pdev->dev,
+			&ralink_dmaengine_pcm_config,
+			SND_DMAENGINE_PCM_FLAG_COMPAT);
+	if (ret)
+	{
+		printk(KERN_ALERT "devm_snd_dmaengine_pcm_register ret:%d\r\n",ret);
+		//goto err_debugfs;
+	}
+	printk(KERN_ALERT "devm_snd_dmaengine_pcm_register ok\r\n");
+
+	ralink_pcm_debug_dma(pcm);
+	
+	//*/
+
+	//dev_info(pcm->dev, "mclk %luMHz\n", clk_get_rate(pcm->clk) / 1000000);
+
+	ralink_pcm_dump_regs(pcm);
+
+	return 0;
+
+err_debugfs:
+	ralink_pcm_debugfs_remove(pcm);
+
+err_clk_disable:
+	clk_disable_unprepare(pcm->clk);
+
+	printk(KERN_ALERT "ret:%d\r\n",ret);
 	return ret;
 }
 
-static int mt7620a_pcm_dev_remove(struct platform_device *pdev)
+static int ralink_pcm_remove(struct platform_device *pdev)
 {
-	struct mt7620a_pcm *pcm = platform_get_drvdata(pdev);
+	struct ralink_pcm *pcm = platform_get_drvdata(pdev);
+	printk(KERN_ALERT "ralink_pcm_remove\n");
+	ralink_pcm_debugfs_remove(pcm);
+	clk_disable_unprepare(pcm->clk);
 
-	snd_soc_unregister_component(&pdev->dev);
+	//snd_soc_unregister_component(&pdev->dev);
 
-	iounmap(pcm->base);
-	release_mem_region(pcm->mem->start, resource_size(pcm->mem));
+	//iounmap(pcm->regs);
+	//release_mem_region(pcm->mem->start, resource_size(pcm->mem));
 
-	kfree(pcm);
+	//kfree(pcm);
 
 	snd_dmaengine_pcm_unregister(&pdev->dev);
 
 	return 0;
 }
 
-static const struct of_device_id mt7620a_pcm_match[] = {
-	{ .compatible = "ralink,mt7620a-pcm" },
-	{},
-};
-MODULE_DEVICE_TABLE(of, mt7620a_pcm_match);
-
-static struct platform_driver mt7620a_pcm_driver = {
-	.probe = mt7620a_pcm_dev_probe,
-	.remove = mt7620a_pcm_dev_remove,
+static struct platform_driver ralink_pcm_driver = {
+	.probe = ralink_pcm_probe,
+	.remove = ralink_pcm_remove,
 	.driver = {
-		.name = "mt7620a-pcm",
-		.owner = THIS_MODULE,
-		.of_match_table = mt7620a_pcm_match,
+		.name = DRV_NAME,
+		.of_match_table = ralink_pcm_match_table,
 	},
 };
+module_platform_driver(ralink_pcm_driver);
 
-module_platform_driver(mt7620a_pcm_driver);
-
-MODULE_AUTHOR("Derek Quan <qdk0901@qq.com>");
-MODULE_DESCRIPTION("MT7628 PCM Driver");
+MODULE_AUTHOR("Lars-Peter Clausen, <lars@metafoo.de>");
+MODULE_DESCRIPTION("Ralink/MediaTek pcm driver");
 MODULE_LICENSE("GPL");
-MODULE_ALIAS("platform:mt7620a-pcm");
+MODULE_ALIAS("platform:" DRV_NAME);
