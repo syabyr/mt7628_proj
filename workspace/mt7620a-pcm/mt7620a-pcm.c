@@ -1,18 +1,3 @@
-/*
- *  Copyright (C) 2010, Lars-Peter Clausen <lars@metafoo.de>
- *  Copyright (C) 2016 Michael Lee <igvtee@gmail.com>
- *
- *  This program is free software; you can redistribute it and/or modify it
- *  under  the terms of the GNU General  Public License as published by the
- *  Free Software Foundation;  either version 2 of the License, or (at your
- *  option) any later version.
- *
- *  You should have received a copy of the GNU General Public License along
- *  with this program; if not, write to the Free Software Foundation, Inc.,
- *  675 Mass Ave, Cambridge, MA 02139, USA.
- *
- */
-
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/clk.h>
@@ -22,117 +7,17 @@
 #include <linux/of_device.h>
 #include <sound/pcm_params.h>
 #include <sound/dmaengine_pcm.h>
-
 #include <asm/mach-ralink/ralink_regs.h>
+
+#include "pcm-reg.h"
+
 
 #define DRV_NAME "ralink-pcm"
 
-#define PCM_GLB_CFG 0x00
-#define PCM_GLB_CFG_EN BIT(31)
-#define PCM_GLB_CFG_DMA_EN BIT(30)
-#define PCM_GLB_CFG_LBK_EN BIT(29)
-#define PCM_GLB_CFG_EXT_LBK_EN BIT(28)
 
-//默认的阈值
-#define PCM_GLB_CFG_RFF_THRES 20
-#define PCM_GLB_CFG_TFF_THRES 16
-#define PCM_GLB_CFG_DFT_THRES	(4 << PCM_GLB_CFG_RFF_THRES) | \
-					(4 << PCM_GLB_CFG_TFF_THRES)
-
-#define PCM_GLB_CFG_CH3_EN BIT(3)
-#define PCM_GLB_CFG_CH2_EN BIT(2)
-#define PCM_GLB_CFG_CH1_EN BIT(1)
-#define PCM_GLB_CFG_CH0_EN BIT(0)
-
-
-
-
-
-
-#define PCM_PCM_CFG 0x04
-#define PCM_PCM_CFG_CLKOUT_EN BIT(30)
-#define PCM_PCM_CFG_EXT_FSYNC BIT(27)
-#define PCM_PCM_CFG_LONG_FSYNC BIT(26)
-#define PCM_PCM_CFG_FSYNC_POL BIT(25)
-
-
-
-#define PCM_INT_STATUS 0x08
-#define PCM_INT_EN 0x0C
-#define PCM_CHA0_FF_STATUS 0x10
-#define PCM_CHB0_FF_STATUS 0x14
-
-#define PCM_CHA0_CFG 0x20
-#define PCM_CHB0_CFG 0x24
-
-#define PCM_FSYNC_CFG 0x30
-#define PCM_FSYNC_EN BIT(31)
-#define PCM_FSYNC_POS_CAP_DT BIT(30)
-#define PCM_FSYNC_POS_DRV_DT BIT(29)
-#define PCM_FSYNC_POS_CAP_FSYNC BIT(28)
-#define PCM_FSYNC_POS_DRV_FSYNC BIT(27)
-
-
-#define PCM_CH_CFG2 0x34
-#define PCM_IP_INFO 0x40
-
-#define PCM_DIVCOMP_CFG 0x50
-#define PCM_DIVCOMP_CFG_CLK_EN BIT(31)
-
-#define PCM_DIVINT_CFG 0x54
-#define PCM_DIGDELAY_CFG 0x60
-#define PCM_CH0_FIFO 0x80
-#define PCM_CH1_FIFO 0x84
-#define PCM_CH2_FIFO 0x88
-#define PCM_CH3_FIFO 0x8c
-
-#define PCM_CHA1_FF_STATUS 0x110
-#define PCM_CHB1_FF_STATUS 0x113
-#define PCM_CHA1_CFG 0x120
-#define PCM_CHB1_CFG 0x124
-#define PCM_CHA1_CFG2 0x134
-#define PCM_CHB1_CFG2 0x138
-
-/////////////////////////////
-
-#define pcm_REG_CFG0		0x00
-#define pcm_REG_INT_STATUS	0x04
-#define pcm_REG_INT_EN		0x08
-#define pcm_REG_FF_STATUS	0x0c
-#define pcm_REG_CFG1		0x18
-#define pcm_REG_DIVCMP		0x20
-#define pcm_REG_DIVINT		0x24
-
-/* pcm_REG_CFG0 */
-#define pcm_REG_CFG0_EN		BIT(31)
-#define pcm_REG_CFG0_DMA_EN	BIT(30)
-#define pcm_REG_CFG0_BYTE_SWAP	BIT(28)
-#define pcm_REG_CFG0_TX_EN	BIT(24)
-#define pcm_REG_CFG0_RX_EN	BIT(20)
-#define pcm_REG_CFG0_SLAVE	BIT(16)
-#define pcm_REG_CFG0_RX_THRES	12
-#define pcm_REG_CFG0_TX_THRES	4
-#define pcm_REG_CFG0_THRES_MASK	(0xf << pcm_REG_CFG0_RX_THRES) | \
-	(4 << pcm_REG_CFG0_TX_THRES)
-#define pcm_REG_CFG0_DFT_THRES	(4 << pcm_REG_CFG0_RX_THRES) | \
-	(4 << pcm_REG_CFG0_TX_THRES)
-/* RT305x */
-#define pcm_REG_CFG0_CLK_DIS	BIT(8)
-#define pcm_REG_CFG0_TXCH_SWAP	BIT(3)
-#define pcm_REG_CFG0_TXCH1_OFF	BIT(2)
-#define pcm_REG_CFG0_TXCH0_OFF	BIT(1)
-#define pcm_REG_CFG0_SLAVE_EN	BIT(0)
-
-
-
-/* feature flags */
-#define RALINK_FLAGS_TXONLY	BIT(0)
-#define RALINK_FLAGS_LEFT_J	BIT(1)
-#define RALINK_FLAGS_RIGHT_J	BIT(2)
-#define RALINK_FLAGS_ENDIAN	BIT(3)
-#define RALINK_FLAGS_24BIT	BIT(4)
-
-#define RALINK_pcm_INT_EN	0
+static int slave_mode=0;
+module_param(slave_mode,int,S_IRUGO);
+MODULE_PARM_DESC(slave_mode, "enable slave test mode.");
 
 
 struct ralink_pcm_stats {
@@ -170,7 +55,7 @@ struct ralink_pcm {
 		struct dentry *dbg_024chb0cfg;
 		struct dentry *dbg_030fsynccfg;
 		struct dentry *dbg_034cha0cfg2;
-		struct dentry *dbg_038cfb0cfg2;
+		struct dentry *dbg_038chb0cfg2;
 		struct dentry *dbg_040rsvreg16;
 		struct dentry *dbg_050divcompcfg;
 		struct dentry *dbg_054divintcfg;
@@ -382,10 +267,10 @@ static int ralink_pcm_startup(struct snd_pcm_substream *substream,
 		return 0;
 
 	/* setup status interrupt */
-#if (RALINK_pcm_INT_EN)
-	regmap_write(pcm->regmap, pcm_REG_INT_EN, 0xff);
+#if (RALINK_PCM_INT_EN)
+	regmap_write(pcm->regmap, PCM_INT_EN, 0xff);
 #else
-	regmap_write(pcm->regmap, pcm_REG_INT_EN, 0x0);
+	regmap_write(pcm->regmap, PCM_INT_EN, 0x0);
 #endif
 
 	/* enable */
@@ -587,42 +472,44 @@ static const struct regmap_config ralink_pcm_regmap_config = {
 	.max_register = PCM_CHB1_CFG2,
 };
 
-#if (RALINK_pcm_INT_EN)
+#if (RALINK_PCM_INT_EN)
 static irqreturn_t ralink_pcm_irq(int irq, void *devid)
 {
 	struct ralink_pcm *pcm = devid;
 	u32 status;
 
-	regmap_read(pcm->regmap, pcm_REG_INT_STATUS, &status);
+	regmap_read(pcm->regmap, PCM_INT_STATUS, &status);
 	if (unlikely(!status))
 		return IRQ_NONE;
 
 	/* tx stats */
-	if (status & pcm_REG_INT_TX_MASK) {
-		if (status & pcm_REG_INT_TX_THRES)
+	if (status & PCM_REG_INT_TX_MASK) {
+		if (status & PCM_INT_STATUS_TX_THRES_INT)
 			pcm->txstats.belowthres++;
-		if (status & pcm_REG_INT_TX_UNRUN)
+		if (status & PCM_INT_STATUS_TX_UNRUN_INT)
 			pcm->txstats.underrun++;
-		if (status & pcm_REG_INT_TX_OVRUN)
+		if (status & PCM_INT_STATUS_TX_OVF_INT)
+		{
 			pcm->txstats.overrun++;
-		if (status & pcm_REG_INT_TX_FAULT)
+		}
+		if (status & PCM_INT_STATUS_TX_DMA_FAULT_INT)
 			pcm->txstats.dmafault++;
 	}
 
 	/* rx stats */
-	if (status & pcm_REG_INT_RX_MASK) {
-		if (status & pcm_REG_INT_RX_THRES)
+	if (status & PCM_REG_INT_RX_MASK) {
+		if (status & PCM_INT_STATUS_RX_THRES_INT)
 			pcm->rxstats.belowthres++;
-		if (status & pcm_REG_INT_RX_UNRUN)
+		if (status & PCM_INT_STATUS_RX_UNRUN_INT)
 			pcm->rxstats.underrun++;
-		if (status & pcm_REG_INT_RX_OVRUN)
+		if (status & PCM_INT_STATUS_RX_OVF_INT)
 			pcm->rxstats.overrun++;
-		if (status & pcm_REG_INT_RX_FAULT)
+		if (status & PCM_INT_STATUS_RX_DMA_FAULT_INT)
 			pcm->rxstats.dmafault++;
 	}
 
 	/* clean status bits */
-	regmap_write(pcm->regmap, pcm_REG_INT_STATUS, status);
+	regmap_write(pcm->regmap, PCM_INT_STATUS, status);
 
 	return IRQ_HANDLED;
 }
@@ -740,6 +627,18 @@ RALINK_PCM_WRITE(_004pcmcfg, 0x4);
 RALINK_PCM_RELEASE(_004pcmcfg);
 RALINK_PCM_FILE_OP(_004pcmcfg);
 
+RALINK_PCM_OPEN(_008intstatus);
+RALINK_PCM_READ(_008intstatus, 0x8);
+RALINK_PCM_WRITE(_008intstatus, 0x8);
+RALINK_PCM_RELEASE(_008intstatus);
+RALINK_PCM_FILE_OP(_008intstatus);
+
+RALINK_PCM_OPEN(_00cinten);
+RALINK_PCM_READ(_00cinten, 0xc);
+RALINK_PCM_WRITE(_00cinten, 0xc);
+RALINK_PCM_RELEASE(_00cinten);
+RALINK_PCM_FILE_OP(_00cinten);
+
 RALINK_PCM_OPEN(_010cha0ffstatus);
 RALINK_PCM_READ(_010cha0ffstatus, 0x10);
 RALINK_PCM_WRITE(_010cha0ffstatus, 0x10);
@@ -770,6 +669,17 @@ RALINK_PCM_WRITE(_030fsynccfg, 0x30);
 RALINK_PCM_RELEASE(_030fsynccfg);
 RALINK_PCM_FILE_OP(_030fsynccfg);
 
+RALINK_PCM_OPEN(_034cha0cfg2);
+RALINK_PCM_READ(_034cha0cfg2, 0x34);
+RALINK_PCM_WRITE(_034cha0cfg2, 0x34);
+RALINK_PCM_RELEASE(_034cha0cfg2);
+RALINK_PCM_FILE_OP(_034cha0cfg2);
+
+RALINK_PCM_OPEN(_038chb0cfg2);
+RALINK_PCM_READ(_038chb0cfg2, 0x38);
+RALINK_PCM_WRITE(_038chb0cfg2, 0x38);
+RALINK_PCM_RELEASE(_038chb0cfg2);
+RALINK_PCM_FILE_OP(_038chb0cfg2);
 
 RALINK_PCM_OPEN(_050divcompcfg);
 RALINK_PCM_READ(_050divcompcfg, 0x50);
@@ -831,6 +741,17 @@ RALINK_PCM_WRITE(_124chb1cfg, 0x124);
 RALINK_PCM_RELEASE(_124chb1cfg);
 RALINK_PCM_FILE_OP(_124chb1cfg);
 
+RALINK_PCM_OPEN(_134cha1cfg2);
+RALINK_PCM_READ(_134cha1cfg2, 0x134);
+RALINK_PCM_WRITE(_134cha1cfg2, 0x134);
+RALINK_PCM_RELEASE(_134cha1cfg2);
+RALINK_PCM_FILE_OP(_134cha1cfg2);
+
+RALINK_PCM_OPEN(_138chb1cfg2);
+RALINK_PCM_READ(_138chb1cfg2, 0x138);
+RALINK_PCM_WRITE(_138chb1cfg2, 0x138);
+RALINK_PCM_RELEASE(_138chb1cfg2);
+RALINK_PCM_FILE_OP(_138chb1cfg2);
 
 #define RALINK_PCM_CREATE(__attr_name , __name) \
 pcm->dbg ##__attr_name = debugfs_create_file(__name,S_IRUGO, \
@@ -854,11 +775,15 @@ static inline int ralink_pcm_debugfs_create(struct ralink_pcm *pcm)
         }
 		RALINK_PCM_CREATE(_000glbcfg,"000_glb_cfg");
 		RALINK_PCM_CREATE(_004pcmcfg,"004_pcm_cfg");
+		RALINK_PCM_CREATE(_008intstatus,"008_int_status");
+		RALINK_PCM_CREATE(_00cinten,"00c_int_en");
 		RALINK_PCM_CREATE(_010cha0ffstatus,"010_cha0_ff_status");
 		RALINK_PCM_CREATE(_014chb0ffstatus,"014_chb0_ff_status");
 		RALINK_PCM_CREATE(_020cha0cfg,"020_cha0_cfg");
 		RALINK_PCM_CREATE(_024chb0cfg,"024_chb0_cfg");
 		RALINK_PCM_CREATE(_030fsynccfg,"030_fsync_cfg");
+		RALINK_PCM_CREATE(_034cha0cfg2,"034_cha0_cfg2");
+		RALINK_PCM_CREATE(_038chb0cfg2,"038_chb0_cfg2");
 		RALINK_PCM_CREATE(_050divcompcfg,"050_divcomp_cfg");
 		RALINK_PCM_CREATE(_054divintcfg,"054_divint_cfg");
 		RALINK_PCM_CREATE(_080ch0fifo,"080_ch0_fifo");
@@ -869,6 +794,8 @@ static inline int ralink_pcm_debugfs_create(struct ralink_pcm *pcm)
 		RALINK_PCM_CREATE(_114chb1ffstatus,"114_chb1_ff_status");
 		RALINK_PCM_CREATE(_120cha1cfg,"120_cha1_cfg");
 		RALINK_PCM_CREATE(_124chb1cfg,"124_chb1_cfg");
+		RALINK_PCM_CREATE(_134cha1cfg2,"134_cha1_cfg2");
+		RALINK_PCM_CREATE(_138chb1cfg2,"138_chb1_cfg2");
 
         return 0;
 }
@@ -878,11 +805,15 @@ static inline void ralink_pcm_debugfs_remove(struct ralink_pcm *pcm)
 	debugfs_remove(pcm->dbg_stats);
 	debugfs_remove(pcm->dbg_000glbcfg);
 	debugfs_remove(pcm->dbg_004pcmcfg);
+	debugfs_remove(pcm->dbg_008intstatus);
+	debugfs_remove(pcm->dbg_00cinten);
 	debugfs_remove(pcm->dbg_010cha0ffstatus);
 	debugfs_remove(pcm->dbg_014chb0ffstatus);
 	debugfs_remove(pcm->dbg_020cha0cfg);
 	debugfs_remove(pcm->dbg_024chb0cfg);
 	debugfs_remove(pcm->dbg_030fsynccfg);
+	debugfs_remove(pcm->dbg_034cha0cfg2);
+	debugfs_remove(pcm->dbg_038chb0cfg2);
 	debugfs_remove(pcm->dbg_050divcompcfg);
 	debugfs_remove(pcm->dbg_054divintcfg);
 	debugfs_remove(pcm->dbg_080ch0fifo);
@@ -893,6 +824,8 @@ static inline void ralink_pcm_debugfs_remove(struct ralink_pcm *pcm)
 	debugfs_remove(pcm->dbg_114chb1ffstatus);
 	debugfs_remove(pcm->dbg_120cha1cfg);
 	debugfs_remove(pcm->dbg_124chb1cfg);
+	debugfs_remove(pcm->dbg_134cha1cfg2);
+	debugfs_remove(pcm->dbg_138chb1cfg2);
 
 	debugfs_remove(pcm->dbg_dir);
 }
@@ -1007,20 +940,17 @@ unsigned long i2sMaster_inclk_comp[11] = {
 static int ralink_pcm_setup(struct ralink_pcm *pcm)
 {
 	uint32_t cfg;
-	//uint32_t tread=0;
-	//uint32_t twrite=0x89abcdef;
-	uint8_t clock_external = 0;
 
 	printk(KERN_ALERT "ralink_pcm_setup\n");
 	//和snd不同的是,这里的寄存器尽量一次性配置完成
 
 	//1.Set PCM_CFG
-	regmap_read(pcm->regmap, PCM_PCM_CFG, &cfg);	//默认情况下,应该是0x03000000
+	//regmap_read(pcm->regmap, PCM_PCM_CFG, &cfg);	//默认情况下,应该是0x03000000
 	
 	cfg = 0x03000000;
 
 	//默认使用内部时钟源
-	if(0 == clock_external)
+	if(0 == slave_mode)
 	{
 		cfg |= PCM_PCM_CFG_CLKOUT_EN; // pcm clock from internal
         cfg &= ~PCM_PCM_CFG_EXT_FSYNC; // pcm sync from internal
@@ -1033,8 +963,7 @@ static int ralink_pcm_setup(struct ralink_pcm *pcm)
 	cfg |= PCM_PCM_CFG_LONG_FSYNC; //long sync mode
     cfg |= PCM_PCM_CFG_FSYNC_POL; // sync high active
 
-	cfg|= 1<<0;
-	//cfg|= 1<<1;
+	cfg|= 1<<0; //使能1bit模式
 
 	//SLOT模式 先默认4槽位,后面再修改
 	regmap_write(pcm->regmap, PCM_PCM_CFG, cfg);
@@ -1043,26 +972,28 @@ static int ralink_pcm_setup(struct ralink_pcm *pcm)
 	//2.暂时不使用中断
 	regmap_write(pcm->regmap, PCM_INT_EN, 0);
 
-	//cha0_cfg
-	cfg=0;
-	regmap_write(pcm->regmap, PCM_CHA0_CFG, cfg);
-
-	cfg=16;
-	regmap_write(pcm->regmap, PCM_CHB0_CFG, cfg);
-
-	cfg=32;
-	regmap_write(pcm->regmap, PCM_CHA1_CFG, cfg);
-
-	cfg=48;
-	regmap_write(pcm->regmap, PCM_CHB1_CFG, cfg);
+	//配置每个槽位的偏移量
+	regmap_write(pcm->regmap, PCM_CHA0_CFG, 0);
+	regmap_write(pcm->regmap, PCM_CHB0_CFG, 16);
+	regmap_write(pcm->regmap, PCM_CHA1_CFG, 32);
+	regmap_write(pcm->regmap, PCM_CHB1_CFG, 48);
 
 
 	//设置同步模式
-	cfg = 0x28000000;
-	//cfg |= PCM_FSYNC_EN;
-	cfg = 0xa8000001;
-	regmap_write(pcm->regmap, PCM_FSYNC_CFG, cfg);
+	//cfg = 0xa8000001;
+	//cfg |= PCM_FSYNC_POS_CAP_DT;
 
+	cfg = PCM_FSYNC_EN|PCM_FSYNC_POS_DRV_DT|PCM_FSYNC_POS_CAP_FSYNC|PCM_FSYNC_POS_DRV_FSYNC;
+	cfg |= BIT(0);
+	regmap_write(pcm->regmap, PCM_FSYNC_CFG, cfg);
+	/*
+	if(0 == slave_mode) {
+
+	}
+	else {
+
+	}
+	*/
 	//设置时钟
 	regmap_write(pcm->regmap, PCM_DIVINT_CFG, i2sMaster_inclk_int[PCMCLOCK_OUT]);
 	regmap_write(pcm->regmap, PCM_DIVCOMP_CFG, i2sMaster_inclk_comp[PCMCLOCK_OUT] | PCM_DIVCOMP_CFG_CLK_EN);
@@ -1071,8 +1002,6 @@ static int ralink_pcm_setup(struct ralink_pcm *pcm)
 
 	//使能PCM
 	//PCM全局寄存器 default 0x00440000
-	regmap_read(pcm->regmap, PCM_GLB_CFG, &cfg);
-
 	cfg = 0x00440000;
 	cfg |= PCM_GLB_CFG_DFT_THRES;
 	cfg |= PCM_GLB_CFG_EN;
@@ -1086,16 +1015,12 @@ static int ralink_pcm_setup(struct ralink_pcm *pcm)
 
 	regmap_write(pcm->regmap,PCM_GLB_CFG,cfg);
 
-	/*
-	regmap_read(pcm->regmap, PCM_CH0_FIFO, &tread);
-	printk(KERN_ALERT "tread ret:%08x\r\n",tread);
-	regmap_write(pcm->regmap,PCM_CH0_FIFO,twrite);
+	#if (RALINK_PCM_INT_EN)
+	regmap_write(pcm->regmap, PCM_INT_EN, 0xff);
+#else
+	regmap_write(pcm->regmap, PCM_INT_EN, 0x0);
+#endif
 
-	regmap_read(pcm->regmap, PCM_CH0_FIFO, &tread);
-	printk(KERN_ALERT "tread ret:%08x\r\n",tread);
-	regmap_read(pcm->regmap, PCM_CH0_FIFO, &tread);
-	printk(KERN_ALERT "tread ret:%08x\r\n",tread);
-	*/
 	return 0;
 }
 
@@ -1221,7 +1146,7 @@ static int ralink_pcm_probe(struct platform_device *pdev)
             return -EINVAL;
     }
 
-#if (RALINK_pcm_INT_EN)
+#if (RALINK_PCM_INT_EN)
 	ret = devm_request_irq(&pdev->dev, irq, ralink_pcm_irq,
 			0, dev_name(&pdev->dev), pcm);
 	if (ret) {
