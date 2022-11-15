@@ -1,0 +1,1 @@
+cmd_/mnt/data/500GB/build/openwrt/21.02.3/mt7628/mt7628_proj/workspace/hello/hello.mod := { echo  /mnt/data/500GB/build/openwrt/21.02.3/mt7628/mt7628_proj/workspace/hello/hello.o;  echo; } > /mnt/data/500GB/build/openwrt/21.02.3/mt7628/mt7628_proj/workspace/hello/hello.mod
