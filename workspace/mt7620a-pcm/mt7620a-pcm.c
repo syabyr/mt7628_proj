@@ -263,9 +263,6 @@ static int ralink_pcm_startup(struct snd_pcm_substream *substream,
 {
 	struct ralink_pcm *pcm = snd_soc_dai_get_drvdata(dai);
 
-	if (dai->active)
-		return 0;
-
 	/* setup status interrupt */
 #if (RALINK_PCM_INT_EN)
 	regmap_write(pcm->regmap, PCM_INT_EN, 0xff);
@@ -288,9 +285,6 @@ static void ralink_pcm_shutdown(struct snd_pcm_substream *substream,
 {
 	struct ralink_pcm *pcm = snd_soc_dai_get_drvdata(dai);
 
-	/* If both streams are stopped, disable module and clock */
-	if (dai->active)
-		return;
 
 	/*
 	 * datasheet mention when disable all control regs are cleared
