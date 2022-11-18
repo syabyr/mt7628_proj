@@ -87,3 +87,7 @@
 &pcm {
         status = "okay";
 };
+
+&gdma {
+	status = "okay";
+};
