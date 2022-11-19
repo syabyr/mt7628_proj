@@ -1,0 +1,121 @@
+#ifndef __PCM_REG_H__
+#define __PCM_REG_H__
+
+#define PCM_GLB_CFG 0x00
+#define PCM_GLB_CFG_EN BIT(31)
+#define PCM_GLB_CFG_DMA_EN BIT(30)
+#define PCM_GLB_CFG_LBK_EN BIT(29)
+#define PCM_GLB_CFG_EXT_LBK_EN BIT(28)
+
+//默认的阈值
+#define PCM_GLB_CFG_RFF_THRES 20
+#define PCM_GLB_CFG_TFF_THRES 16
+#define PCM_GLB_CFG_DFT_THRES	(4 << PCM_GLB_CFG_RFF_THRES) | \
+					(4 << PCM_GLB_CFG_TFF_THRES)
+
+#define PCM_GLB_CFG_CH3_EN BIT(3)
+#define PCM_GLB_CFG_CH2_EN BIT(2)
+#define PCM_GLB_CFG_CH1_EN BIT(1)
+#define PCM_GLB_CFG_CH0_EN BIT(0)
+
+
+
+
+
+
+#define PCM_PCM_CFG 0x04
+#define PCM_PCM_CFG_CLKOUT_EN BIT(30)
+#define PCM_PCM_CFG_EXT_FSYNC BIT(27)
+#define PCM_PCM_CFG_LONG_FSYNC BIT(26)
+#define PCM_PCM_CFG_FSYNC_POL BIT(25)
+
+
+
+#define PCM_INT_STATUS 0x08
+#define PCM_INT_STATUS_TX_THRES_INT BIT(0)
+#define PCM_INT_STATUS_TX_UNRUN_INT BIT(1)
+#define PCM_INT_STATUS_TX_OVF_INT BIT(2)
+#define PCM_INT_STATUS_TX_DMA_FAULT_INT BIT(3)
+#define PCM_INT_STATUS_RX_THRES_INT BIT(4)
+#define PCM_INT_STATUS_RX_UNRUN_INT BIT(5)
+#define PCM_INT_STATUS_RX_OVF_INT BIT(6)
+#define PCM_INT_STATUS_RX_DMA_FAULT_INT BIT(7)
+
+#define PCM_REG_INT_TX_MASK	0xf
+#define PCM_REG_INT_RX_MASK	0xf0
+
+#define PCM_INT_EN 0x0C
+#define PCM_CHA0_FF_STATUS 0x10
+#define PCM_CHB0_FF_STATUS 0x14
+
+#define PCM_CHA0_CFG 0x20
+#define PCM_CHB0_CFG 0x24
+
+#define PCM_FSYNC_CFG 0x30
+#define PCM_FSYNC_EN BIT(31)
+#define PCM_FSYNC_POS_CAP_DT BIT(30)
+#define PCM_FSYNC_POS_DRV_DT BIT(29)
+#define PCM_FSYNC_POS_CAP_FSYNC BIT(28)
+#define PCM_FSYNC_POS_DRV_FSYNC BIT(27)
+
+
+#define PCM_CH_CFG2 0x34
+#define PCM_IP_INFO 0x40
+
+#define PCM_DIVCOMP_CFG 0x50
+#define PCM_DIVCOMP_CFG_CLK_EN BIT(31)
+
+#define PCM_DIVINT_CFG 0x54
+#define PCM_DIGDELAY_CFG 0x60
+#define PCM_CH0_FIFO 0x80
+#define PCM_CH1_FIFO 0x84
+#define PCM_CH2_FIFO 0x88
+#define PCM_CH3_FIFO 0x8c
+
+#define PCM_CHA1_FF_STATUS 0x110
+#define PCM_CHB1_FF_STATUS 0x113
+#define PCM_CHA1_CFG 0x120
+#define PCM_CHB1_CFG 0x124
+#define PCM_CHA1_CFG2 0x134
+#define PCM_CHB1_CFG2 0x138
+
+/////////////////////////////
+
+#define pcm_REG_CFG0		0x00
+#define pcm_REG_FF_STATUS	0x0c
+#define pcm_REG_CFG1		0x18
+#define pcm_REG_DIVCMP		0x20
+#define pcm_REG_DIVINT		0x24
+
+/* pcm_REG_CFG0 */
+#define pcm_REG_CFG0_EN		BIT(31)
+#define pcm_REG_CFG0_DMA_EN	BIT(30)
+#define pcm_REG_CFG0_BYTE_SWAP	BIT(28)
+#define pcm_REG_CFG0_TX_EN	BIT(24)
+#define pcm_REG_CFG0_RX_EN	BIT(20)
+#define pcm_REG_CFG0_SLAVE	BIT(16)
+#define pcm_REG_CFG0_RX_THRES	12
+#define pcm_REG_CFG0_TX_THRES	4
+#define pcm_REG_CFG0_THRES_MASK	(0xf << pcm_REG_CFG0_RX_THRES) | \
+	(4 << pcm_REG_CFG0_TX_THRES)
+#define pcm_REG_CFG0_DFT_THRES	(4 << pcm_REG_CFG0_RX_THRES) | \
+	(4 << pcm_REG_CFG0_TX_THRES)
+/* RT305x */
+#define pcm_REG_CFG0_CLK_DIS	BIT(8)
+#define pcm_REG_CFG0_TXCH_SWAP	BIT(3)
+#define pcm_REG_CFG0_TXCH1_OFF	BIT(2)
+#define pcm_REG_CFG0_TXCH0_OFF	BIT(1)
+#define pcm_REG_CFG0_SLAVE_EN	BIT(0)
+
+
+
+/* feature flags */
+#define RALINK_FLAGS_TXONLY	BIT(0)
+#define RALINK_FLAGS_LEFT_J	BIT(1)
+#define RALINK_FLAGS_RIGHT_J	BIT(2)
+#define RALINK_FLAGS_ENDIAN	BIT(3)
+#define RALINK_FLAGS_24BIT	BIT(4)
+
+#define RALINK_PCM_INT_EN	1
+
+#endif
