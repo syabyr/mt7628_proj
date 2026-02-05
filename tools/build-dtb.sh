@@ -1,7 +1,6 @@
 # compile dtb
-echo "build dts from mt7628_proj/dts/25.12.0/dts-modify/mt7628an_mediatek_mt7628an-eval-board.dts"
-cp mt7628_proj/dts/25.12.0/dts-modify/mt7628an_mediatek_mt7628an-eval-board.dts dev/sdk/target/linux/ramips/dts/mt7628an_syq-mt7628.dts
-mipsel-openwrt-linux-musl-cpp -nostdinc -x assembler-with-cpp -I dev/sdk/build_dir/target-mipsel_24kc_musl/linux-ramips_mt76x8/linux-6.12.66/include/ -undef -D__DTS__  -o  mt7628an_syq-mt7628.dtb.tmp dev/sdk/target/linux/ramips/dts/mt7628an_syq-mt7628.dts
+echo "build dts from mt7628_proj/dts/25.12.0/dts-modify/mt7628an_mediatek_syq-mt7628an.dts"
+mipsel-openwrt-linux-musl-cpp -nostdinc -x assembler-with-cpp -I dev/sdk/build_dir/target-mipsel_24kc_musl/linux-ramips_mt76x8/linux-6.12.66/include/ -undef -D__DTS__  -o  mt7628an_syq-mt7628.dtb.tmp mt7628_proj/dts/25.12.0/dts-modify/mt7628an_mediatek_syq-mt7628an.dts
 ./dev/sdk/build_dir/target-mipsel_24kc_musl/linux-ramips_mt76x8/linux-6.12.66/scripts/dtc/dtc -O dtb -i./dev/sdk/target/linux/ramips/dts -i./dev/sdk/build_dir/target-mipsel_24kc_musl/linux-ramips_mt76x8/linux-6.12.66/scripts/dtc/include-prefixes -Wno-unit_address_vs_reg -Wno-simple_bus_reg -Wno-unit_address_format -Wno-pci_bridge -Wno-pci_device_bus_num -Wno-pci_device_reg -Wno-avoid_unnecessary_addr_size -Wno-alias_paths -Wno-graph_child_address -Wno-graph_port -Wno-unique_unit_address -o mt7628an_syq-mt7628.dtb mt7628an_syq-mt7628.dtb.tmp
 
 # combine
