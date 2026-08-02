@@ -2,7 +2,7 @@
 
 / {
 	compatible = "mediatek,mt7628an-eval-board", "mediatek,mt7628an-soc";
-	model = "SYQ-MT7628AN dev board";
+	model = "Mediatek MT7628AN evaluation board";
 };
 
 &state_default {
@@ -67,4 +67,27 @@
 
 	nvmem-cells = <&eeprom_factory_0>;
 	nvmem-cell-names = "eeprom";
+};
+
+&pinctrl {
+    ephy-digital;
+
+    sdxc_iot_mode: sdxc_iot_mode {
+        esd {
+            groups = "esd";
+            function = "iot";
+        };
+
+        sdxc {
+            groups = "sdmode";
+            function = "sdxc";
+        };
+    };
+};
+
+&sdhci {
+	status = "okay";
+	pinctrl-0 = <&sdxc_iot_mode>;
+	pinctrl-1 = <&sdxc_iot_mode>;
+	mediatek,cd-low;
 };
