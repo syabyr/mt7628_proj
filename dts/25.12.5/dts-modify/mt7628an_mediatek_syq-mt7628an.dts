@@ -76,14 +76,6 @@
 	mediatek,portmap = <0x3e>;
 };
 
-&uart1 {
-	status = "okay";
-};
-
-&uart2 {
-	status = "okay";
-};
-
 &i2s {
 	#sound-dai-cells = <0>;
 	status = "okay";

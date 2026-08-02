@@ -1,7 +1,7 @@
 # compile dtb
 echo "build dts from dts/25.12.5/dts-modify/mt7628an_mediatek_syq-mt7628an.dts"
-mipsel-openwrt-linux-musl-cpp -nostdinc -x assembler-with-cpp -I dev/sdk/build_dir/target-mipsel_24kc_musl/linux-ramips_mt76x8/linux-6.12.66/include/ -undef -D__DTS__  -o  mt7628an_syq-mt7628.dtb.tmp dts/25.12.5/dts-modify/mt7628an_mediatek_syq-mt7628an.dts
-./dev/sdk/build_dir/target-mipsel_24kc_musl/linux-ramips_mt76x8/linux-6.12.94/scripts/dtc/dtc -O dtb -i./dev/sdk/target/linux/ramips/dts -i./dev/sdk/build_dir/target-mipsel_24kc_musl/linux-ramips_mt76x8/linux-6.12.94/scripts/dtc/include-prefixes -Wno-unit_address_vs_reg -Wno-simple_bus_reg -Wno-unit_address_format -Wno-pci_bridge -Wno-pci_device_bus_num -Wno-pci_device_reg -Wno-avoid_unnecessary_addr_size -Wno-alias_paths -Wno-graph_child_address -Wno-graph_port -Wno-unique_unit_address -o mt7628an_syq-mt7628.dtb mt7628an_syq-mt7628.dtb.tmp
+mipsel-openwrt-linux-musl-cpp -nostdinc -x assembler-with-cpp -I dev/sdk/build_dir/target-mipsel_24kc_musl/linux-ramips_mt76x8/linux-6.12.94/include/ -undef -D__DTS__  -o  mt7628an_syq-mt7628.dtb.tmp dts/25.12.5/dts-modify/mt7628an_mediatek_syq-mt7628an.dts
+./dev/sdk/build_dir/target-mipsel_24kc_musl/linux-ramips_mt76x8/linux-6.12.94/scripts/dtc/dtc -O dtb -i./dev/sdk/target/linux/ramips/dts -i./dev/sdk/build_dir/target-mipsel_24kc_musl/linux-ramips_mt76x8/linux-6.12.94/scripts/dtc/include-prefixes -i./dev/sdk/build_dir/target-mipsel_24kc_musl/linux-ramips_mt76x8/linux-6.12.94/include -Wno-unit_address_vs_reg -Wno-simple_bus_reg -Wno-unit_address_format -Wno-pci_bridge -Wno-pci_device_bus_num -Wno-pci_device_reg -Wno-avoid_unnecessary_addr_size -Wno-alias_paths -Wno-graph_child_address -Wno-graph_port -Wno-unique_unit_address -o mt7628an_syq-mt7628.dtb mt7628an_syq-mt7628.dtb.tmp
 
 # combine
 cp ./dev/imagebuilder/build_dir/target-mipsel_24kc_musl/linux-ramips_mt76x8/vmlinux syq-mt7628.bin
@@ -9,6 +9,14 @@ cat mt7628an_syq-mt7628.dtb >> syq-mt7628.bin
 ./dev/sdk/staging_dir/host/bin/lzma e syq-mt7628.bin -lc1 -lp2 -pb2 syq-mt7628.bin.new
 
 mkimage -A mips -O linux -T kernel -C lzma -a 0x80000000 -e 0x80000000 -n 'MIPS OpenWrt Linux-6.12.94' -d syq-mt7628.bin.new syq-mt7628.bin
+
+# pad kernel to 64KB alignment so mtd sub-partition is writable
+KERNEL_SIZE=$(stat -c%s syq-mt7628.bin)
+ALIGNED=$(( (KERNEL_SIZE + 0xFFFF) / 0x10000 * 0x10000 ))
+if [ $ALIGNED -gt $KERNEL_SIZE ]; then
+	dd if=/dev/zero bs=1 count=$((ALIGNED - KERNEL_SIZE)) >> syq-mt7628.bin
+	echo "kernel padded: $KERNEL_SIZE -> $ALIGNED (+$((ALIGNED - KERNEL_SIZE)) bytes)"
+fi
 
 rm syq-mt7628.bin.new
 rm mt7628an_syq-mt7628.dtb.tmp
