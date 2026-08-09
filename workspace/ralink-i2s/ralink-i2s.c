@@ -115,7 +115,7 @@
 #define RALINK_FLAGS_ENDIAN	BIT(3)
 #define RALINK_FLAGS_24BIT	BIT(4)
 
-#define RALINK_I2S_INT_EN	0
+#define RALINK_I2S_INT_EN	1
 
 struct ralink_i2s_stats {
 	u32 dmafault;
@@ -509,7 +509,7 @@ static struct snd_soc_dai_driver ralink_i2s_dai = {
 		.rates = SNDRV_PCM_RATE_CONTINUOUS,
 		.formats = SNDRV_PCM_FMTBIT_S16_LE,
 	},
-	.symmetric_rates = 1,
+	.symmetric_rate = 1,
 };
 
 static struct snd_pcm_hardware ralink_pcm_hardware = {
@@ -896,7 +896,11 @@ static int ralink_i2s_probe(struct platform_device *pdev)
 
 	ralink_i2s_init_dma_data(i2s, res);
 
-	device_reset(&pdev->dev);
+	ret = device_reset(&pdev->dev);
+	if (ret) {
+		dev_err(&pdev->dev, "device reset failed\n");
+		goto err_clk_disable;
+	}
 
 	ret = ralink_i2s_debugfs_create(i2s);
 	if (ret) {
@@ -975,14 +979,12 @@ err_clk_disable:
 	return ret;
 }
 
-static int ralink_i2s_remove(struct platform_device *pdev)
+static void ralink_i2s_remove(struct platform_device *pdev)
 {
 	struct ralink_i2s *i2s = platform_get_drvdata(pdev);
 	printk(KERN_ALERT "ralink_i2s_remove\n");
 	ralink_i2s_debugfs_remove(i2s);
 	clk_disable_unprepare(i2s->clk);
-
-	return 0;
 }
 
 static struct platform_driver ralink_i2s_driver = {
