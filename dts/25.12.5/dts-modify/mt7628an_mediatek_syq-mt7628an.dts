@@ -93,6 +93,9 @@
 &spi0 {
 	status = "okay";
 
+	pinctrl-names = "default";
+	pinctrl-0 = <&spi_pins>, <&spi_cs1_pins>;
+
 	flash@0 {
 		compatible = "jedec,spi-nor";
 		reg = <0>;
@@ -141,6 +144,12 @@
 				reg = <0x50000 0xfb0000>;
 			};
 		};
+	};
+
+	spidev@1 {
+		compatible = "rohm,dh2228fv";
+		reg = <1>;
+		spi-max-frequency = <10000000>;
 	};
 };
 
